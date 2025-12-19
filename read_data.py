@@ -24,7 +24,12 @@ def load_drs_instances(drs_dir):
     for idx in sorted(instances.keys(), key=int):
         entry = instances[idx]
         if all(k in entry for k in ["anchor", "a", "b"]):
-            data.append((entry["anchor"], entry["a"], entry["b"]))
+            data.append({
+                'idx': int(idx),  # Keep index for debugging
+                'anchor': entry["anchor"],
+                'a': entry["a"],
+                'b': entry["b"]
+            })
         else:
             print(f"Warning: instance {idx} incomplete, ignored.")
 
