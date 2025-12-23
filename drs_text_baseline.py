@@ -18,6 +18,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import cross_val_score, StratifiedKFold
 from sklearn.preprocessing import StandardScaler, RobustScaler
 import os
+from xgboost import XGBClassifier
 
 from drs_parser import parse_drs_file
 from drs_similarity import DRSSimilarity
@@ -389,7 +390,18 @@ class HybridEvaluator:
                 max_features='sqrt',  # Use fewer features per split
                 random_state=42
             )
-
+        elif classifier == 'xgboost':
+            self.trained_model = XGBClassifier(
+                n_estimators=200,
+                max_depth=4,
+                learning_rate=0.05,
+                min_child_weight=5,
+                subsample=0.8,
+                colsample_bytree=0.7,
+                reg_alpha=0.1,  # L1 regularization
+                reg_lambda=1.0,  # L2 regularization
+                random_state=42
+           )
         else:
             raise ValueError(f"Unknown classifier: {classifier}")
 
@@ -978,8 +990,20 @@ class HybridEvaluator:
         # Choose classifier
         if classifier == 'logistic':
             clf = LogisticRegression(max_iter=1000, random_state=42)
-        else:
+        elif:
             clf = RandomForestClassifier(n_estimators=100, random_state=42)
+        else classifier == 'xgboost':
+            clf = XGBClassifier(
+                n_estimators=200,
+                max_depth=4,
+                learning_rate=0.05,
+                min_child_weight=5,
+                subsample=0.8,
+                colsample_bytree=0.7,
+                reg_alpha=0.1,  # L1 regularization
+                reg_lambda=1.0,  # L2 regularization
+                random_state=42
+           )
 
         # Cross-validation
         cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
@@ -1104,7 +1128,7 @@ if __name__ == "__main__":
         print("=" * 70)
 
         # Train on synthetic data
-        train_stats = evaluator.train_hybrid_model(classifier='random_forest')
+        train_stats = evaluator.train_hybrid_model(classifier='xgboost')
 
         print("\n" + "=" * 70)
         print("STEP 3: TEST HYBRID MODEL ON DEV SET")
