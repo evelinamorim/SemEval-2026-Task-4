@@ -11,19 +11,22 @@ from scipy.spatial.distance import cosine, euclidean
 from scipy.stats import entropy
 from drs_parser import parse_drs_file
 
-from sentence_transformers import SentenceTransformer
-import spacy
-#_EMBEDDING_MODEL = None
-#def _get_embedding_model():
-#    """Get cached embedding model (load once, reuse)."""
-#    global _EMBEDDING_MODEL
-#    if _EMBEDDING_MODEL is None:
-#        print("Loading embedding model (one-time)...")
-#        _EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-#        print("Model loaded!")
-#    return _EMBEDDING_MODEL
+# Global cache for spaCy model
+_SPACY_MODEL = None
+LOAD_COUNT = 0
 
-nlp = spacy.load("en_core_web_md")
+def _get_spacy_model():
+    """Get cached spaCy model (load once, reuse)."""
+    global _SPACY_MODEL
+    global LOAD_COUNT
+    if _SPACY_MODEL is None:
+        import spacy
+        LOAD_COUNT += 1
+        print(f"🔴 Loading spaCy model (load #{LOAD_COUNT})...")
+        print("Loading spaCy model (one-time, ~2 seconds)...")
+        _SPACY_MODEL = spacy.load("en_core_web_md")
+        print("✓ spaCy model loaded!")
+    return _SPACY_MODEL
 
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
@@ -184,23 +187,21 @@ class DRSSimilarity:
             #print(f"  → Similarity: 0.0 (empty)")
             return 0.0
 
+        phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
+        phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
+
+
+        nlp = _get_spacy_model()
+        docs_1 = list(nlp.pipe(phrases_1))
+        docs_2 = list(nlp.pipe(phrases_2))
+
         similarities = []
-
-        for rel1_type, event1, event2 in temp_rels_1:
+        for i, (rel1_type, _, _) in enumerate(temp_rels_1):
             max_sim = 0.0
-
-            for rel2_type, event3, event4 in temp_rels_2:
-                if rel1_type != rel2_type:
-                    continue
-
-                # Get word vectors
-                doc1 = nlp(f"{event1} {event2}")
-                doc2 = nlp(f"{event3} {event4}")
-
-                # Similarity (cosine by default)
-                sim = doc1.similarity(doc2)
-                max_sim = max(max_sim, sim)
-
+            for j, (rel2_type, _, _) in enumerate(temp_rels_2):
+                if rel1_type == rel2_type:
+                    sim = docs_1[i].similarity(docs_2[j])
+                    max_sim = max(max_sim, sim)
             similarities.append(max_sim)
 
         return np.mean(similarities) if similarities else 0.0
