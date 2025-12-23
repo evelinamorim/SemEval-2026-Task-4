@@ -381,7 +381,15 @@ class HybridEvaluator:
         if classifier == 'logistic':
             self.trained_model = LogisticRegression(max_iter=1000, random_state=42)
         elif classifier == 'random_forest':
-            self.trained_model = RandomForestClassifier(n_estimators=100, random_state=42)
+            self.trained_model = RandomForestClassifier(
+                n_estimators=100,
+                max_depth=5,  # Limit tree depth (default: None)
+                min_samples_split=10,  # Need more samples to split (default: 2)
+                min_samples_leaf=5,  # Need more samples in leaf (default: 1)
+                max_features='sqrt',  # Use fewer features per split
+                random_state=42
+            )
+
         else:
             raise ValueError(f"Unknown classifier: {classifier}")
 
