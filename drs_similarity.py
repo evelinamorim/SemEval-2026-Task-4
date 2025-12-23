@@ -10,23 +10,39 @@ import numpy as np
 from scipy.spatial.distance import cosine, euclidean
 from scipy.stats import entropy
 from drs_parser import parse_drs_file
+from transformers import BertTokenizer, BertModel
+import torch
 
-# Global cache for spaCy model
-_SPACY_MODEL = None
-LOAD_COUNT = 0
+_BERT_MODEL = None
+_BERT_TOKENIZER = None
 
-def _get_spacy_model():
-    """Get cached spaCy model (load once, reuse)."""
-    global _SPACY_MODEL
-    global LOAD_COUNT
-    if _SPACY_MODEL is None:
-        import spacy
-        LOAD_COUNT += 1
-        print(f"🔴 Loading spaCy model (load #{LOAD_COUNT})...")
-        print("Loading spaCy model (one-time, ~2 seconds)...")
-        _SPACY_MODEL = spacy.load("en_core_web_md")
-        print("✓ spaCy model loaded!")
-    return _SPACY_MODEL
+
+def _get_bert_model():
+    """Get cached BERT model (load once, reuse)."""
+    global _BERT_MODEL, _BERT_TOKENIZER
+    if _BERT_MODEL is None:
+        print("Loading BERT model (one-time, ~3 seconds)...")
+        _BERT_TOKENIZER = BertTokenizer.from_pretrained('bert-base-uncased')
+        _BERT_MODEL = BertModel.from_pretrained('bert-base-uncased')
+        _BERT_MODEL.eval()  # Set to evaluation mode
+        print("✓ BERT model loaded!")
+    return _BERT_TOKENIZER, _BERT_MODEL
+
+
+def _get_bert_embedding(text):
+    """Get average BERT embedding for text (word-level)."""
+    tokenizer, model = _get_bert_model()
+
+    # Tokenize
+    inputs = tokenizer(text, return_tensors='pt', padding=True, truncation=True, max_length=20)
+
+    # Get embeddings
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Average over tokens (excluding [CLS] and [SEP])
+    embedding = outputs.last_hidden_state[0, 1:-1, :].mean(dim=0).numpy()
+    return embedding
 
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
@@ -190,18 +206,21 @@ class DRSSimilarity:
         phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
         phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
 
+        emb_1 = np.array([_get_bert_embedding(p) for p in phrases_1])
+        emb_2 = np.array([_get_bert_embedding(p) for p in phrases_2])
 
-        nlp = _get_spacy_model()
-        docs_1 = list(nlp.pipe(phrases_1))
-        docs_2 = list(nlp.pipe(phrases_2))
-
+        # Compare
         similarities = []
         for i, (rel1_type, _, _) in enumerate(temp_rels_1):
             max_sim = 0.0
             for j, (rel2_type, _, _) in enumerate(temp_rels_2):
-                if rel1_type == rel2_type:
-                    sim = docs_1[i].similarity(docs_2[j])
-                    max_sim = max(max_sim, sim)
+                if rel1_type != rel2_type:
+                    continue
+
+                # Cosine similarity
+                sim = np.dot(emb_1[i], emb_2[j]) / (np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j]))
+                max_sim = max(max_sim, sim)
+
             similarities.append(max_sim)
 
         return np.mean(similarities) if similarities else 0.0
