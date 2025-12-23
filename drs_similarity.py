@@ -7,11 +7,21 @@ against ground truth labels from dev_track_a.jsonl
 
 import json
 import numpy as np
-from collections import Counter
 from scipy.spatial.distance import cosine, euclidean
 from scipy.stats import entropy
 from drs_parser import parse_drs_file
 
+from sentence_transformers import SentenceTransformer
+
+_EMBEDDING_MODEL = None
+def _get_embedding_model():
+    """Get cached embedding model (load once, reuse)."""
+    global _EMBEDDING_MODEL
+    if _EMBEDDING_MODEL is None:
+        print("Loading embedding model (one-time)...")
+        _EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
+        print("Model loaded!")
+    return _EMBEDDING_MODEL
 
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
@@ -118,6 +128,91 @@ class DRSSimilarity:
         # Convert to similarity: 1 - sqrt(JS divergence)
         return 1 - np.sqrt(js_div)
 
+    def _extract_temporal_relation_tuples(self, features):
+        """
+        Extract temporal relations with actual event words.
+
+        Returns:
+            list: [(relation_type, event1_word, event2_word), ...]
+        """
+        # Get events and temporal relations
+        events = features.get('events', [])
+        temp_relations = features.get('temporal_relations_raw', [])
+
+        if not events or not temp_relations:
+            return []
+
+        # Build mapping from event variable to event word
+        var_to_word = {}
+        for event in events:
+            var = event.get('variable', '')
+            word = event.get('text', event.get('word', ''))
+            if var and word:
+                var_to_word[var] = word
+
+        # Extract ALL relation tuples (not just first few)
+        tuples = []
+        for rel in temp_relations:
+            rel_type = rel.get('type', '')
+            source = rel.get('source', '')
+            target = rel.get('target', '')
+
+            source_word = var_to_word.get(source, '')
+            target_word = var_to_word.get(target, '')
+
+            # Only add if both words exist and relation is occursBefore/After
+            if source_word and target_word and rel_type in ['occursBefore', 'occursAfter']:
+                tuples.append((rel_type, source_word, target_word))
+
+        return tuples
+
+    def temporal_relation_semantic_similarity(self):
+        """Compare temporal relations using semantic similarity."""
+
+        # Get temporal relations
+        temp_rels_1 = self._extract_temporal_relation_tuples(self.feat1)
+        temp_rels_2 = self._extract_temporal_relation_tuples(self.feat2)
+
+        # DEBUG
+        #print(f"  Relations extracted:")
+        #print(f"    Story 1: {len(temp_rels_1)} total")
+        #print(f"    Story 2: {len(temp_rels_2)} total")
+
+        if len(temp_rels_1) == 0 or len(temp_rels_2) == 0:
+            #print(f"  → Similarity: 0.0 (empty)")
+            return 0.0
+
+        # Use CACHED model (loaded once)
+        model = _get_embedding_model()
+
+        # Precompute embeddings for all event pairs
+        phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
+        phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
+
+        emb_1 = model.encode(phrases_1)
+        emb_2 = model.encode(phrases_2)
+
+        # Compare: for each relation in story 1, find best match in story 2
+        similarities = []
+
+        for i, (rel1_type, _, _) in enumerate(temp_rels_1):
+            max_sim = 0.0
+
+            for j, (rel2_type, _, _) in enumerate(temp_rels_2):
+                # Only compare same relation type
+                if rel1_type != rel2_type:
+                    continue
+
+                # Cosine similarity
+                sim = np.dot(emb_1[i], emb_2[j]) / (np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j]))
+                max_sim = max(max_sim, sim)
+
+            similarities.append(max_sim)
+
+        result = np.mean(similarities) if similarities else 0.0
+        #print(f"  → Similarity: {result:.3f}")
+        return result
+
     def temporal_relation_similarity(self):
         """
         Jaccard similarity of temporal relation types.
@@ -181,6 +276,43 @@ class DRSSimilarity:
         # Cosine similarity of distributions
         return 1 - cosine(dist1, dist2)
 
+    def event_sequence_similarity(self):
+        """Compute similarity based on event sequences (bigrams)."""
+        # FIX: Change features1 → feat1, features2 → feat2
+        bigrams1 = self.feat1.get('event_bigrams', [])
+        bigrams2 = self.feat2.get('event_bigrams', [])
+
+        set1 = set(bigrams1) if bigrams1 else set()
+        set2 = set(bigrams2) if bigrams2 else set()
+
+        # if len(set1) == 0 and len(set2) == 0:
+        #    return 1.0
+        if len(set1 | set2) == 0:
+            return 0.0
+
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+        return intersection / union if union > 0 else 0.0
+
+    def event_trigram_similarity(self):
+        """Compute similarity based on event trigrams."""
+        # FIX: Change features1 → feat1, features2 → feat2
+        trigrams1 = self.feat1.get('event_trigrams', [])
+        trigrams2 = self.feat2.get('event_trigrams', [])
+
+        set1 = set(trigrams1) if trigrams1 else set()
+        set2 = set(trigrams2) if trigrams2 else set()
+
+        #if len(set1) == 0 and len(set2) == 0:
+        #    return 1.0
+        if len(set1 | set2) == 0:
+            return 0.0
+
+        intersection = len(set1 & set2)
+        union = len(set1 | set2)
+        return intersection / union if union > 0 else 0.0
+
+
     def event_count_ratio(self):
         """
         Ratio of event counts (smaller/larger).
@@ -208,6 +340,9 @@ class DRSSimilarity:
             'temporal_density': self.temporal_density_similarity(),
             'tense': self.tense_similarity(),
             'event_count_ratio': self.event_count_ratio(),
+            'event_sequence': self.event_sequence_similarity(),
+            'event_trigram': self.event_trigram_similarity(),
+            'temporal_relation_semantic': self.temporal_relation_semantic_similarity()
         }
 
     def aggregate_similarity(self, weights=None):
