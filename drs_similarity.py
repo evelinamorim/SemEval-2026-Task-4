@@ -12,16 +12,18 @@ from scipy.stats import entropy
 from drs_parser import parse_drs_file
 
 from sentence_transformers import SentenceTransformer
+import spacy
+#_EMBEDDING_MODEL = None
+#def _get_embedding_model():
+#    """Get cached embedding model (load once, reuse)."""
+#    global _EMBEDDING_MODEL
+#    if _EMBEDDING_MODEL is None:
+#        print("Loading embedding model (one-time)...")
+#        _EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
+#        print("Model loaded!")
+#    return _EMBEDDING_MODEL
 
-_EMBEDDING_MODEL = None
-def _get_embedding_model():
-    """Get cached embedding model (load once, reuse)."""
-    global _EMBEDDING_MODEL
-    if _EMBEDDING_MODEL is None:
-        print("Loading embedding model (one-time)...")
-        _EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-        print("Model loaded!")
-    return _EMBEDDING_MODEL
+nlp = spacy.load("en_core_web_md")
 
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
@@ -182,36 +184,26 @@ class DRSSimilarity:
             #print(f"  → Similarity: 0.0 (empty)")
             return 0.0
 
-        # Use CACHED model (loaded once)
-        model = _get_embedding_model()
-
-        # Precompute embeddings for all event pairs
-        phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
-        phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
-
-        emb_1 = model.encode(phrases_1)
-        emb_2 = model.encode(phrases_2)
-
-        # Compare: for each relation in story 1, find best match in story 2
         similarities = []
 
-        for i, (rel1_type, _, _) in enumerate(temp_rels_1):
+        for rel1_type, event1, event2 in temp_rels_1:
             max_sim = 0.0
 
-            for j, (rel2_type, _, _) in enumerate(temp_rels_2):
-                # Only compare same relation type
+            for rel2_type, event3, event4 in temp_rels_2:
                 if rel1_type != rel2_type:
                     continue
 
-                # Cosine similarity
-                sim = np.dot(emb_1[i], emb_2[j]) / (np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j]))
+                # Get word vectors
+                doc1 = nlp(f"{event1} {event2}")
+                doc2 = nlp(f"{event3} {event4}")
+
+                # Similarity (cosine by default)
+                sim = doc1.similarity(doc2)
                 max_sim = max(max_sim, sim)
 
             similarities.append(max_sim)
 
-        result = np.mean(similarities) if similarities else 0.0
-        #print(f"  → Similarity: {result:.3f}")
-        return result
+        return np.mean(similarities) if similarities else 0.0
 
     def temporal_relation_similarity(self):
         """
