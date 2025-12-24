@@ -44,6 +44,41 @@ def _get_bert_embedding(text):
     embedding = outputs.last_hidden_state[0, 1:-1, :].mean(dim=0).numpy()
     return embedding
 
+
+def _get_bert_embeddings_batch(texts):
+    """Get BERT embeddings for multiple texts at once (BATCHED - 10-20x faster)."""
+    if not texts:
+        return np.array([])
+
+    tokenizer, model = _get_bert_model()
+
+    # Tokenize all texts at once
+    inputs = tokenizer(
+        texts,
+        return_tensors='pt',
+        padding=True,
+        truncation=True,
+        max_length=20
+    )
+
+    # Get embeddings
+    with torch.no_grad():
+        outputs = model(**inputs)
+
+    # Average over tokens for each text (excluding [CLS] and [SEP])
+    embeddings = []
+    for i in range(len(texts)):
+        # Find actual sequence length (excluding padding)
+        seq_len = (inputs['attention_mask'][i] == 1).sum().item()
+        if seq_len > 2:  # Has tokens beyond [CLS] and [SEP]
+            embedding = outputs.last_hidden_state[i, 1:seq_len - 1, :].mean(dim=0).numpy()
+        else:
+            # Edge case: very short text
+            embedding = outputs.last_hidden_state[i, 0, :].numpy()
+        embeddings.append(embedding)
+
+    return np.array(embeddings)
+
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
 
@@ -206,8 +241,8 @@ class DRSSimilarity:
         phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
         phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
 
-        emb_1 = np.array([_get_bert_embedding(p) for p in phrases_1])
-        emb_2 = np.array([_get_bert_embedding(p) for p in phrases_2])
+        emb_1 = _get_bert_embeddings_batch(phrases_1)
+        emb_2 = _get_bert_embeddings_batch(phrases_2)
 
         # Compare
         similarities = []
@@ -217,8 +252,9 @@ class DRSSimilarity:
                 if rel1_type != rel2_type:
                     continue
 
-                # Cosine similarity
-                sim = np.dot(emb_1[i], emb_2[j]) / (np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j]))
+                sim = np.dot(emb_1[i], emb_2[j]) / (
+                        np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j])
+                )
                 max_sim = max(max_sim, sim)
 
             similarities.append(max_sim)

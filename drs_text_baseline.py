@@ -990,9 +990,9 @@ class HybridEvaluator:
         # Choose classifier
         if classifier == 'logistic':
             clf = LogisticRegression(max_iter=1000, random_state=42)
-        elif:
+        elif classifier == 'random_forest':
             clf = RandomForestClassifier(n_estimators=100, random_state=42)
-        else classifier == 'xgboost':
+        elif classifier == 'xgboost':
             clf = XGBClassifier(
                 n_estimators=200,
                 max_depth=4,
