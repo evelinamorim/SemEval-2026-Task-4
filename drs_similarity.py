@@ -6,7 +6,10 @@ against ground truth labels from dev_track_a.jsonl
 """
 
 import json
+from collections import Counter
+
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 from scipy.spatial.distance import cosine, euclidean
 from scipy.stats import entropy
 from drs_parser import parse_drs_file
@@ -385,6 +388,18 @@ class DRSSimilarity:
                 return 0.5
 
         return 0.0
+
+    def verbnet_distribution_similarity(self):
+        """Compare VerbNet class distributions."""
+        vn1 = self.feat1.get('verbnet_class_distribution', Counter())
+        vn2 = self.feat2.get('verbnet_class_distribution', Counter())
+
+        # Convert to vectors
+        all_classes = set(vn1.keys()) | set(vn2.keys())
+        vec1 = [vn1.get(c, 0) for c in all_classes]
+        vec2 = [vn2.get(c, 0) for c in all_classes]
+
+        return cosine_similarity([vec1], [vec2])[0][0] if all_classes else 0.0
 
     def event_trigram_similarity(self):
         """Compute similarity based on event trigrams."""

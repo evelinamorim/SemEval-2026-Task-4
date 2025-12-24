@@ -427,6 +427,17 @@ class DRSParser:
             return 0.0
         return len(self.temporal_relations) / self.get_event_count()
 
+    def get_verbnet_class_distribution(self):
+        """Count events by VerbNet parent class."""
+        classes = []
+        for event in self.events:
+            vn_class = self._normalize_event(event.get('text', ''))
+            if '-' in vn_class:  # Is a VerbNet class
+                parent = '-'.join(vn_class.split('-')[:2])
+                classes.append(parent)
+
+        return Counter(classes)
+
     def get_feature_vector(self):
         """
         Extract complete feature vector from DRS.
@@ -439,6 +450,7 @@ class DRSParser:
         aspects = self.get_aspect_distribution()
         temp_rels = self.get_temporal_relation_types()
         sem_rels = self.get_semantic_relation_types()
+        vn_classes = self.get_verbnet_class_distribution()
 
         return {
             # Basic counts
@@ -486,7 +498,11 @@ class DRSParser:
 
             # Raw data for semantic comparison
             'events': self.events,
-            'temporal_relations_raw': self.temporal_relations
+            'temporal_relations_raw': self.temporal_relations,
+
+            'verbnet_class_count': len(vn_classes),
+            'verbnet_class_diversity': len(vn_classes) / max(len(self.events), 1),
+            'dominant_verbnet_class': vn_classes.most_common(1)[0][0] if vn_classes else None
         }
 
     def get_event_bigrams(self):

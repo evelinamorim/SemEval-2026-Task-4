@@ -20,8 +20,24 @@ from sklearn.preprocessing import StandardScaler, RobustScaler
 import os
 from xgboost import XGBClassifier
 
-from drs_parser import parse_drs_file
+from drs_parser import parse_drs_file, DRSParser
 from drs_similarity import DRSSimilarity
+
+
+import spacy
+
+
+_SPACY_MODEL = None
+
+
+def _get_spacy_model():
+    """Get cached BERT model (load once, reuse)."""
+    global _SPACY_MODEL
+    if _SPACY_MODEL is None:
+        print("Loading spacy model (one-time, ~3 seconds)...")
+        _SPACY_MODEL = spacy.load('en_core_web_lg')
+        print("✓ spacy model loaded!")
+    return _SPACY_MODEL
 
 
 class TextBaseline:
@@ -137,6 +153,42 @@ class HybridEvaluator:
                 data.append(item)
         return data
 
+    def _annotate_with_verbnet(self, text):
+        """
+        Annotate text with VerbNet classes.
+
+        Example: "He bought a car" → "He [get-13.5] a car"
+        """
+        nlp = _get_spacy_model()
+        doc = nlp(text)
+
+        annotated_tokens = []
+        for token in doc:
+            if token.pos_ == 'VERB':
+                # Get VerbNet class
+                lemma = token.lemma_
+                vn_class = DRSParser._verbnet_normalizer.get(lemma, None)
+
+                if vn_class:
+                    # Add VerbNet annotation
+                    annotated_tokens.append(f"[{vn_class}]")
+                else:
+                    annotated_tokens.append(token.text)
+            else:
+                annotated_tokens.append(token.text)
+
+        return ' '.join(annotated_tokens)
+
+    def get_verbnet_enriched_text(self, idx, dataset='test'):
+        """Add VerbNet annotations to text before encoding."""
+        item = self.get_data_item(idx, dataset)
+
+        # Parse and annotate with VerbNet classes
+        # "He bought a car" → "He [get-13.5:bought] a car"
+        enriched_text = self._annotate_with_verbnet(item['anchor_text'])
+
+        return enriched_text
+
     def extract_drs_features(self, idx, dataset='test'):
         """
         Extract DRS features for a triplet.
@@ -235,7 +287,7 @@ class HybridEvaluator:
             print(f"Warning: Error parsing DRS for idx {idx} in {dataset} set: {e}")
             return None
 
-    def extract_text_features(self, idx, dataset='test'):
+    def extract_text_features(self, idx, dataset='test', use_verbnet=False):
         """
         Extract text embedding features for a triplet.
 
@@ -264,6 +316,12 @@ class HybridEvaluator:
         anchor_text = item.get('anchor_text')
         text_a = item.get('text_a')
         text_b = item.get('text_b')
+
+        if use_verbnet:
+            # Enrich text with VerbNet annotations
+            anchor_text = self._annotate_with_verbnet(anchor_text)
+            text_a = self._annotate_with_verbnet(text_a)
+            text_b = self._annotate_with_verbnet(text_b)
 
         # Validate: skip if any text field is None or empty
         if not anchor_text or not text_a or not text_b:
