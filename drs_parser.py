@@ -366,11 +366,9 @@ class DRSParser:
             # Map variables back to event objects
             var_to_event = {e['variable']: e for e in self.events}
             ordered_events = [var_to_event[v] for v in ordered_vars if v in var_to_event]
-            #print(f"Temporal relations found: {len(self.temporal_relations)}")
-            ordered_events = list(nx.topological_sort(G))
-            #print(f"Ordered {len(ordered_events)}/{len(self.events)} events")
 
             return ordered_events
+
         except nx.NetworkXError:
             # Cycle detected or disconnected graph - cannot determine full order
             return None
