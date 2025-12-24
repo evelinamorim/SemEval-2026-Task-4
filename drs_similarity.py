@@ -450,7 +450,8 @@ class DRSSimilarity:
                 'event_count_ratio': self.event_count_ratio(),
                 'event_sequence': self.event_sequence_similarity(),
                 'event_trigram': self.event_trigram_similarity(),
-                'temporal_relation_semantic': self.temporal_relation_semantic_similarity()
+                'temporal_relation_semantic': self.temporal_relation_semantic_similarity(),
+                'verbnet_distribution':self.verbnet_distribution_similarity()
             }
         except Exception as e:
             print(f"ERROR in similarity computation: {e}")

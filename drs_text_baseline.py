@@ -833,7 +833,8 @@ class HybridEvaluator:
             'temporal_relation': 0.15,
             'temporal_density': 0.1,
             'tense': 0.1,
-            'event_count_ratio': 0.15
+            'event_count_ratio': 0.15,
+            'verbnet_distribution':0.15
         }
 
         aggregate = 0.0
