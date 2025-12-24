@@ -325,22 +325,66 @@ class DRSSimilarity:
         return 1 - cosine(dist1, dist2)
 
     def event_sequence_similarity(self):
-        """Compute similarity based on event sequences (bigrams)."""
-        # FIX: Change features1 → feat1, features2 → feat2
+        """Compute similarity based on event sequences (bigrams) with VerbNet generalization."""
         bigrams1 = self.feat1.get('event_bigrams', [])
         bigrams2 = self.feat2.get('event_bigrams', [])
 
-        set1 = set(bigrams1) if bigrams1 else set()
-        set2 = set(bigrams2) if bigrams2 else set()
-
-        # if len(set1) == 0 and len(set2) == 0:
-        #    return 1.0
-        if len(set1 | set2) == 0:
+        if not bigrams1 or not bigrams2:
             return 0.0
 
-        intersection = len(set1 & set2)
-        union = len(set1 | set2)
-        return intersection / union if union > 0 else 0.0
+        # Count semantic matches (not just exact)
+        matches = 0
+        for bg1 in bigrams1:
+            for bg2 in bigrams2:
+                similarity = self._bigram_similarity(bg1, bg2)
+                matches += similarity
+
+        # Normalize by average length
+        avg_len = (len(bigrams1) + len(bigrams2)) / 2
+        return matches / avg_len if avg_len > 0 else 0.0
+
+    def _bigram_similarity(self, bigram1, bigram2):
+        """
+        Compute similarity between two bigrams.
+
+        Returns:
+            1.0 for exact match
+            0.8 for same VerbNet parent class
+            0.5 for same top-level class
+            0.0 for no match
+        """
+        v1_1, v1_2 = bigram1
+        v2_1, v2_2 = bigram2
+
+        # Compare each verb pair
+        sim1 = self._verb_similarity(v1_1, v2_1)
+        sim2 = self._verb_similarity(v1_2, v2_2)
+
+        # Bigram similarity is average of verb similarities
+        return (sim1 + sim2) / 2
+
+    def _verb_similarity(self, verb1, verb2):
+        """Compare two VerbNet-normalized verbs."""
+        if verb1 == verb2:
+            return 1.0
+
+        # Check if both are VerbNet classes (contain '-')
+        if '-' in verb1 and '-' in verb2:
+            # Same parent class (e.g., 'get-13.5' vs 'get-13.1')
+            parent1 = '-'.join(verb1.split('-')[:2])
+            parent2 = '-'.join(verb2.split('-')[:2])
+
+            if parent1 == parent2:
+                return 0.8
+
+            # Same top-level (e.g., 'get-13.5' vs 'obtain-13.7')
+            top1 = verb1.split('-')[0]
+            top2 = verb2.split('-')[0]
+
+            if top1 == top2:
+                return 0.5
+
+        return 0.0
 
     def event_trigram_similarity(self):
         """Compute similarity based on event trigrams."""

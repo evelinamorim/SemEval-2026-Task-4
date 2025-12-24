@@ -172,19 +172,11 @@ class HybridEvaluator:
         try:
             # Parse DRS files
             anchor_parser = parse_drs_file(anchor_path)
-            print("\n=== NORMALIZATION TEST ===")
-            for event in anchor_parser.events[:5]:  # First 5 events
-                original = event.get('text', '')
-                normalized = anchor_parser._normalize_event(original)
-
-                print(f"{original:30s} → {normalized}")
             a_parser = parse_drs_file(a_path)
             b_parser = parse_drs_file(b_path)
 
+
             anchor_feat = anchor_parser.get_feature_vector()
-            print("\n=== BIGRAM COMPARISON ===")
-            print("Original bigrams:", anchor_feat.get('event_bigrams')[:3])
-            print("VerbNet bigrams:", anchor_feat.get('event_bigrams_verbnet')[:3])
             a_feat = a_parser.get_feature_vector()
             b_feat = b_parser.get_feature_vector()
 
@@ -193,8 +185,23 @@ class HybridEvaluator:
             sim_anchor_b = DRSSimilarity(anchor_feat, b_feat)
 
             # Get all similarity metrics
-            drs_sims_a = sim_anchor_a.compute_all_similarities()
-            drs_sims_b = sim_anchor_b.compute_all_similarities()
+            try:
+                drs_sims_a = sim_anchor_a.compute_all_similarities()
+            except Exception as e:
+                print(f"\n!!! ERROR in DRSSimilarity for anchor-A at idx {idx}:")
+                print(f"    {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+
+            try:
+                drs_sims_b = sim_anchor_b.compute_all_similarities()
+            except Exception as e:
+                print(f"\n!!! ERROR in DRSSimilarity for anchor-B at idx {idx}:")
+                print(f"    {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
 
             # DEBUG: Check if new features exist
             # if idx < 3:  # Only print first 3 to avoid spam
