@@ -935,31 +935,9 @@ class HybridEvaluator:
 
     def evaluate_hybrid_simple(self, dataset='test', verbose=False):
         """
-        Simple hybrid: average of DRS cosine + text similarity.
-
-        Args:
-            dataset: 'train' or 'test'
-            verbose: Print detailed results
-
-        Returns:
-            dict: Evaluation results
+        Simple hybrid: average of DRS + text similarity.
         """
-        if dataset == 'train':
-            data_source = self.train_data
-            data_name = "TRAINING"
-        else:
-            data_source = self.test_data
-            data_name = "TEST"
-
-        if data_source is None:
-            print(f"ERROR: No {dataset} data loaded!")
-            return None
-
-        print("\n" + "=" * 60)
-        print(f"EVALUATING: HYBRID (Simple Average) on {data_name} SET")
-        print("=" * 60)
-
-        results = []
+        # ... existing code ...
 
         for idx, item in enumerate(data_source):
             hybrid_feat = self.extract_hybrid_features(idx, dataset)
@@ -967,12 +945,36 @@ class HybridEvaluator:
             if hybrid_feat is None:
                 continue
 
-            # Simple average: (DRS_cosine + Text) / 2
-            drs_a = hybrid_feat['drs_features']['sims_a']['cosine']
-            drs_b = hybrid_feat['drs_features']['sims_b']['cosine']
+            # OLD VERSION (just cosine):
+            # drs_a = hybrid_feat['drs_features']['sims_a']['cosine']
+            # drs_b = hybrid_feat['drs_features']['sims_b']['cosine']
+
+            # NEW VERSION (better - combine multiple DRS metrics):
+            sims_a = hybrid_feat['drs_features']['sims_a']
+            sims_b = hybrid_feat['drs_features']['sims_b']
+
+            # Combine cosine + verbnet_distribution (if available)
+            drs_metrics = []
+            if 'cosine' in sims_a:
+                drs_metrics.append(sims_a['cosine'])
+            if 'verbnet_distribution' in sims_a:  # After you add feature #2
+                drs_metrics.append(sims_a['verbnet_distribution'])
+
+            drs_a = sum(drs_metrics) / len(drs_metrics) if drs_metrics else 0.0
+
+            drs_metrics_b = []
+            if 'cosine' in sims_b:
+                drs_metrics_b.append(sims_b['cosine'])
+            if 'verbnet_distribution' in sims_b:
+                drs_metrics_b.append(sims_b['verbnet_distribution'])
+
+            drs_b = sum(drs_metrics_b) / len(drs_metrics_b) if drs_metrics_b else 0.0
+
+            # Text similarities (unchanged)
             text_a = hybrid_feat['text_features']['sim_a']
             text_b = hybrid_feat['text_features']['sim_b']
 
+            # Combine DRS + Text
             combined_a = (drs_a + text_a) / 2
             combined_b = (drs_b + text_b) / 2
 
