@@ -16,6 +16,7 @@ from nltk.corpus import verbnet
 
 class DRSParser:
     """Parser for DRS output files."""
+    _verbnet_normalizer = None
 
     def __init__(self, filepath):
         self.filepath = filepath
@@ -24,21 +25,33 @@ class DRSParser:
         self.relations = []
         self.temporal_relations = []
         self.semantic_relations = []
-        self._init_verbnet()
 
-    def _init_verbnet(self):
-        """Initialize VerbNet normalizer."""
+        if DRSParser._verbnet_normalizer is None:
+            DRSParser._init_verbnet_class()
+
+        self.event_normalizer = DRSParser._verbnet_normalizer
+
+    @classmethod
+    def _init_verbnet_class(cls):
+        """Initialize VerbNet normalizer once for all instances."""
         try:
-            # Build verb → class mapping
-            self.event_normalizer = {}
-            for classid in verbnet.classids():
-                verbs = verbnet.lemmas(classid=classid)
-                for verb in verbs:
-                    self.event_normalizer[verb] = classid
-            print(f"✓ VerbNet loaded: {len(self.event_normalizer)} verbs")
+            from nltk.corpus import verbnet as vn
+
+            cls._verbnet_normalizer = {}
+
+            for classid in vn.classids():
+                vnclass = vn.vnclass(classid)
+                parent_class = '-'.join(classid.split('-')[:2])
+
+                for member in vnclass.findall('MEMBERS/MEMBER'):
+                    verb = member.get('name')
+                    if verb:
+                        cls._verbnet_normalizer[verb] = parent_class
+
+            print(f"✓ VerbNet loaded: {len(cls._verbnet_normalizer)} verbs")
         except Exception as e:
             print(f"Warning: VerbNet not available: {e}")
-            self.event_normalizer = {}
+            cls._verbnet_normalizer = {}
 
     def _normalize_event(self, event_text):
         """Normalize event using VerbNet."""
@@ -478,7 +491,6 @@ class DRSParser:
             if isinstance(event1, dict) and isinstance(event2, dict):
                 verb1 = self._normalize_event(event1.get('text', ''))
                 verb2 = self._normalize_event(event2.get('text', ''))
-                print(f"Bigram: {verb1, verb2}")
                 bigrams.append((verb1, verb2))
         return bigrams
 
