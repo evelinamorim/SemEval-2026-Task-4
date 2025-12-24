@@ -937,7 +937,22 @@ class HybridEvaluator:
         """
         Simple hybrid: average of DRS + text similarity.
         """
-        # ... existing code ...
+        if dataset == 'train':
+            data_source = self.train_data
+            data_name = "TRAINING"
+        else:
+            data_source = self.test_data
+            data_name = "TEST"
+
+        if data_source is None:
+            print(f"ERROR: No {dataset} data loaded!")
+            return None
+
+        print("\n" + "=" * 60)
+        print(f"EVALUATING: HYBRID (Simple Average) on {data_name} SET")
+        print("=" * 60)
+
+        results = []
 
         for idx, item in enumerate(data_source):
             hybrid_feat = self.extract_hybrid_features(idx, dataset)
