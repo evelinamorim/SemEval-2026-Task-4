@@ -172,10 +172,19 @@ class HybridEvaluator:
         try:
             # Parse DRS files
             anchor_parser = parse_drs_file(anchor_path)
+            print("\n=== NORMALIZATION TEST ===")
+            for event in anchor_parser.events[:5]:  # First 5 events
+                original = event.get('text', '')
+                normalized = anchor_parser._normalize_event(original)
+
+                print(f"{original:30s} → {normalized}")
             a_parser = parse_drs_file(a_path)
             b_parser = parse_drs_file(b_path)
 
             anchor_feat = anchor_parser.get_feature_vector()
+            print("\n=== BIGRAM COMPARISON ===")
+            print("Original bigrams:", anchor_feat.get('event_bigrams')[:3])
+            print("VerbNet bigrams:", anchor_feat.get('event_bigrams_verbnet')[:3])
             a_feat = a_parser.get_feature_vector()
             b_feat = b_parser.get_feature_vector()
 

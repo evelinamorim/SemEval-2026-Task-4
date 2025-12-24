@@ -13,6 +13,20 @@ from collections import defaultdict, Counter
 import networkx as nx
 from nltk.corpus import verbnet
 
+import spacy
+
+
+_SPACY_MODEL = None
+
+
+def _get_spacy_model():
+    """Get cached BERT model (load once, reuse)."""
+    global _SPACY_MODEL
+    if _SPACY_MODEL is None:
+        print("Loading spacy model (one-time, ~3 seconds)...")
+        _SPACY_MODEL = spacy.load('en_core_web_lg')
+        print("✓ spacy model loaded!")
+    return _SPACY_MODEL
 
 class DRSParser:
     """Parser for DRS output files."""
@@ -55,11 +69,23 @@ class DRSParser:
 
     def _normalize_event(self, event_text):
         """Normalize event using VerbNet."""
-        # Lemmatize first (if not already)
-        lemma = event_text.lower().strip()
+
+        # Parse text to extract verb
+        nlp = _get_spacy_model()
+        doc = nlp(event_text.lower())
+
+        # Find main verb (first VERB POS tag)
+        verb = None
+        for token in doc:
+            if token.pos_ == 'VERB':
+                verb = token.lemma_
+                break
+
+        if not verb:
+            return event_text.lower()  # Fallback to original
 
         # Map to VerbNet class
-        return self.event_normalizer.get(lemma, lemma)
+        return self.event_normalizer.get(verb, verb)
 
     def parse(self):
         """Main parsing function."""
@@ -466,32 +492,38 @@ class DRSParser:
         }
 
     def get_event_bigrams(self):
-        """
-        Extract consecutive event type pairs (bigrams) using TEMPORAL order.
-
-        Returns:
-            list: List of (event_type1, event_type2) tuples in temporal sequence
-        """
+        """Extract consecutive event bigrams using TEMPORAL order."""
         if len(self.events) < 2:
             return []
 
-        # Try to get temporal ordering from relations
+        # Get temporal ordering
         ordered_events = self._get_temporally_ordered_events()
 
-        # Fallback to document order if temporal order unavailable
+        # Fallback to document order
         if ordered_events is None or len(ordered_events) == 0:
             ordered_events = sorted(self.events, key=lambda e: e.get('position', 0))
+
+        # ADDED: Safety check
+        if len(ordered_events) < 2:
+            return []
 
         bigrams = []
         for i in range(len(ordered_events) - 1):
             event1 = ordered_events[i]
             event2 = ordered_events[i + 1]
 
-            # Robust extraction of event type
             if isinstance(event1, dict) and isinstance(event2, dict):
-                verb1 = self._normalize_event(event1.get('text', ''))
-                verb2 = self._normalize_event(event2.get('text', ''))
+                text1 = event1.get('text', '')
+                text2 = event2.get('text', '')
+
+                # ADDED: Skip if no text
+                if not text1 or not text2:
+                    continue
+
+                verb1 = self._normalize_event(text1)
+                verb2 = self._normalize_event(text2)
                 bigrams.append((verb1, verb2))
+
         return bigrams
 
     def get_event_trigrams(self):
@@ -519,9 +551,14 @@ class DRSParser:
 
             # Robust extraction of event type
             if isinstance(event1, dict) and isinstance(event2, dict) and isinstance(event3, dict):
-                verb1 = self._normalize_event(event1.get('text', ''))
-                verb2 = self._normalize_event(event2.get('text', ''))
-                verb3 = self._normalize_event(event3.get('text', ''))
+                text1 = event1.get('text','')
+                text2 = event2.get('text','')
+                text3 = event3.get('text','')
+                if not text1 or not text2 or not text3:
+                    continue
+                verb1 = self._normalize_event(text1)
+                verb2 = self._normalize_event(text2)
+                verb3 = self._normalize_event(text3)
                 trigrams.append((verb1, verb2, verb3))
 
         return trigrams

@@ -380,18 +380,23 @@ class DRSSimilarity:
         Returns:
             dict: All similarity scores
         """
-        return {
-            'cosine': self.cosine_similarity(),
-            'euclidean': self.euclidean_distance(),
-            'event_type': self.event_type_similarity(),
-            'temporal_relation': self.temporal_relation_similarity(),
-            'temporal_density': self.temporal_density_similarity(),
-            'tense': self.tense_similarity(),
-            'event_count_ratio': self.event_count_ratio(),
-            'event_sequence': self.event_sequence_similarity(),
-            'event_trigram': self.event_trigram_similarity(),
-            'temporal_relation_semantic': self.temporal_relation_semantic_similarity()
-        }
+        try:
+            return {
+                'cosine': self.cosine_similarity(),
+                'euclidean': self.euclidean_distance(),
+                'event_type': self.event_type_similarity(),
+                'temporal_relation': self.temporal_relation_similarity(),
+                'temporal_density': self.temporal_density_similarity(),
+                'tense': self.tense_similarity(),
+                'event_count_ratio': self.event_count_ratio(),
+                'event_sequence': self.event_sequence_similarity(),
+                'event_trigram': self.event_trigram_similarity(),
+                'temporal_relation_semantic': self.temporal_relation_semantic_similarity()
+            }
+        except Exception as e:
+            print(f"ERROR in similarity computation: {e}")
+            import traceback
+            traceback.print_exc()
 
     def aggregate_similarity(self, weights=None):
         """
