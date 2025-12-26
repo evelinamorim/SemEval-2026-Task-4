@@ -833,8 +833,8 @@ class HybridEvaluator:
             'temporal_relation': 0.15,
             'temporal_density': 0.1,
             'tense': 0.1,
-            'event_count_ratio': 0.15,
-            'verbnet_distribution':0.15
+            'event_count_ratio': 0.15
+            #'verbnet_distribution':0.15
         }
 
         aggregate = 0.0
@@ -970,19 +970,21 @@ class HybridEvaluator:
             sims_b = hybrid_feat['drs_features']['sims_b']
 
             # Combine cosine + verbnet_distribution (if available)
-            drs_metrics = []
+            drs_metrics_a = []
             if 'cosine' in sims_a:
-                drs_metrics.append(sims_a['cosine'])
+                drs_metrics_a.append(sims_a['cosine'])
             if 'verbnet_distribution' in sims_a:  # After you add feature #2
-                drs_metrics.append(sims_a['verbnet_distribution'])
+                drs_metrics_a.append(sims_a['verbnet_distribution'])
+            if 'logic_sim' in sims_a: drs_metrics_a.append(sims_a['logic_sim'])
 
-            drs_a = sum(drs_metrics) / len(drs_metrics) if drs_metrics else 0.0
+            drs_a = sum(drs_metrics_a) / len(drs_metrics_a) if drs_metrics_a else 0.0
 
             drs_metrics_b = []
             if 'cosine' in sims_b:
                 drs_metrics_b.append(sims_b['cosine'])
             if 'verbnet_distribution' in sims_b:
                 drs_metrics_b.append(sims_b['verbnet_distribution'])
+            if 'logic_sim' in sims_b: drs_metrics_b.append(sims_b['logic_sim'])
 
             drs_b = sum(drs_metrics_b) / len(drs_metrics_b) if drs_metrics_b else 0.0
 
@@ -991,12 +993,13 @@ class HybridEvaluator:
             text_b = hybrid_feat['text_features']['sim_b']
 
             # Combine DRS + Text
-            combined_a = (drs_a + text_a) / 2
-            combined_b = (drs_b + text_b) / 2
+            combined_a = (0.6 * text_a) + (0.4 * drs_a)
+            combined_b = (0.6 * text_b) + (0.4 * drs_b)
 
             predicted_a_is_closer = combined_a > combined_b
             ground_truth = item['text_a_is_closer']
             correct = predicted_a_is_closer == ground_truth
+            # In evaluate_hybrid_simple(), in the loop
 
             results.append({
                 'idx': idx,

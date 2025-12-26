@@ -451,12 +451,41 @@ class DRSSimilarity:
                 'event_sequence': self.event_sequence_similarity(),
                 'event_trigram': self.event_trigram_similarity(),
                 'temporal_relation_semantic': self.temporal_relation_semantic_similarity(),
-                'verbnet_distribution':self.verbnet_distribution_similarity()
+                #'verbnet_distribution':self.verbnet_distribution_similarity(),
+                'logic_sim': self.logic_predicate_similarity()
             }
         except Exception as e:
             print(f"ERROR in similarity computation: {e}")
             import traceback
             traceback.print_exc()
+
+
+    def logic_predicate_similarity(self):
+        """
+        Similarity between high-level VerbNet logic (motion, cause, etc.).
+        Helps capture the Causal dimension of narrative similarity.
+        """
+        # 1. Get the dictionaries from the feature vectors
+        lp1 = self.feat1.get('logic_predicates', {})
+        lp2 = self.feat2.get('logic_predicates', {})
+
+        # If either story has no identifiable predicates, similarity is 0
+        if not lp1 or not lp2:
+            return 0.0
+
+        # 2. Align the keys to create vectors
+        all_predicates = set(lp1.keys()) | set(lp2.keys())
+        vec1 = np.array([lp1.get(p, 0) for p in all_predicates])
+        vec2 = np.array([lp2.get(p, 0) for p in all_predicates])
+
+        # 3. Calculate Cosine Similarity
+        norm1 = np.linalg.norm(vec1)
+        norm2 = np.linalg.norm(vec2)
+
+        if norm1 == 0 or norm2 == 0:
+            return 0.0
+
+        return 1 - cosine(vec1, vec2)
 
     def aggregate_similarity(self, weights=None):
         """
