@@ -936,8 +936,8 @@ class HybridEvaluator:
 
     def evaluate_hybrid_simple(self, dataset='test', verbose=False):
         """
-        Simple hybrid: weighted sum of DRS + text similarity.
-        Optimized to handle sparse logic features separately.
+        Simple hybrid: weighted sum of SBERT, DRS Structure, and Temporal Semantics.
+        Uses a 60/20/20 split to balance global, structural, and semantic signals.
         """
         if dataset == 'train':
             data_source = self.train_data
@@ -951,7 +951,7 @@ class HybridEvaluator:
             return None
 
         print("\n" + "=" * 60)
-        print(f"EVALUATING: HYBRID (Weighted Simple) on {data_name} SET")
+        print(f"EVALUATING: HYBRID (Weighted Semantic) on {data_name} SET")
         print("=" * 60)
 
         results = []
@@ -963,40 +963,33 @@ class HybridEvaluator:
             sims_a = hybrid_feat['drs_features']['sims_a']
             sims_b = hybrid_feat['drs_features']['sims_b']
 
-            # INDIVIDUAL DRS COMPONENTS
-            drs_cos_a = sims_a.get('cosine', 0.0)
-            drs_log_a = sims_a.get('logic_sim', 0.0)
-
-            drs_cos_b = sims_b.get('cosine', 0.0)
-            drs_log_b = sims_b.get('logic_sim', 0.0)
-
-            # TEXT COMPONENT
+            # 1. TEXT COMPONENT (Global Context)
+            # This is your SBERT score (Baseline: 0.615)
             text_a = hybrid_feat['text_features']['sim_a']
             text_b = hybrid_feat['text_features']['sim_b']
 
-            # THE "STABLE" WEIGHTING FORMULA
-            # 65% Text (Reliable)
-            # 30% DRS Structure (The part that got you 0.64)
-            # 05% Logic Bonus (Small enough not to ruin the score if sparse)
+            # 2. DRS STRUCTURAL COMPONENT (Literal Match)
+            # This is the graph-based cosine that helped get you to 0.640
+            drs_cos_a = sims_a.get('cosine', 0.0)
+            drs_cos_b = sims_b.get('cosine', 0.0)
 
-            w_text, w_struct, w_logic = 0.65, 0.30, 0.05
+            # 3. DRS TEMPORAL SEMANTIC COMPONENT (Fuzzy Event Match)
+            # This uses BERT to compare event transitions, bridging the "synonym gap"
+            drs_temp_a = sims_a.get('temporal_relation_semantic', 0.0)
+            drs_temp_b = sims_b.get('temporal_relation_semantic', 0.0)
 
-            score_a = (w_text * text_a) + (w_struct * drs_cos_a) + (w_logic * drs_log_a)
-            score_b = (w_text * text_b) + (w_struct * drs_cos_b) + (w_logic * drs_log_b)
+            # 4. WEIGHTING STRATEGY
+            # w_text:   0.60 (Keep the strong global signal)
+            # w_struct: 0.20 (Structural verification)
+            # w_temp:   0.20 (Semantic event verification)
+            # Logic:    0.00 (Currently too sparse/noisy)
 
-            # --- DIAGNOSTIC PRINT TEST ---
-            # Print specifically when Logic and Structure disagree
-            logic_disagrees = (drs_log_a > drs_log_b) != (drs_cos_a > drs_cos_b)
-            if verbose and logic_disagrees:
-                print(f"\n[DIAGNOSTIC {idx}] Conflict Found:")
-                print(f"  A: Text={text_a:.2f}, Struct={drs_cos_a:.2f}, Logic={drs_log_a:.2f} -> Score: {score_a:.3f}")
-                print(f"  B: Text={text_b:.2f}, Struct={drs_cos_b:.2f}, Logic={drs_log_b:.2f} -> Score: {score_b:.3f}")
-                print(
-                    f"  Logic preferred {'A' if drs_log_a > drs_log_b else 'B'}, but Structure preferred {'A' if drs_cos_a > drs_cos_b else 'B'}")
-            # ------------------------------
+            w_text, w_struct, w_temp = 0.60, 0.20, 0.20
+
+            score_a = (w_text * text_a) + (w_struct * drs_cos_a) + (w_temp * drs_temp_a)
+            score_b = (w_text * text_b) + (w_struct * drs_cos_b) + (w_temp * drs_temp_b)
 
             predicted_a_is_closer = score_a > score_b
-            # ... (rest of the evaluation logic) ...
             ground_truth = item['text_a_is_closer']
             correct = predicted_a_is_closer == ground_truth
 
@@ -1007,9 +1000,12 @@ class HybridEvaluator:
                 'correct': correct
             })
 
-            if verbose and idx % 20 == 0: # Print every 20th for brevity
+            if verbose and (not correct or idx % 50 == 0):
                 status = "✓" if correct else "✗"
-                print(f"{status} [{idx}] Text: {text_a:.2f} vs {text_b:.2f} | DRS: {drs_cos_a:.2f} vs {drs_cos_b:.2f}")
+                print(
+                    f"{status} [{idx}] Score A: {score_a:.3f} (Text:{text_a:.2f}, Struct:{drs_cos_a:.2f}, Temp:{drs_temp_a:.2f})")
+                print(
+                    f"      Score B: {score_b:.3f} (Text:{text_b:.2f}, Struct:{drs_cos_b:.2f}, Temp:{drs_temp_b:.2f})")
 
         accuracy = sum(r['correct'] for r in results) / len(results)
 
@@ -1137,7 +1133,7 @@ class HybridEvaluator:
         results['drs_event_type'] = self.evaluate_drs_only('event_type', dataset)
 
         # 3. Hybrid - Simple
-        results['hybrid_simple'] = self.evaluate_hybrid_simple(dataset)
+        results['hybrid_simple'] = self.evaluate_hybrid_simple(dataset, verbose=True)
 
         # 4. Hybrid - ML (only if using single dataset for CV)
         if dataset == 'test' and self.train_data is None:
@@ -1207,50 +1203,50 @@ if __name__ == "__main__":
         print("=" * 70)
 
         # Evaluate baselines on test set
-        text_result = evaluator.evaluate_text_only(dataset='test')
+        #text_result = evaluator.evaluate_text_only(dataset='test')
         drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
         drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
-        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test')
+        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=True)
 
-        print("\n" + "=" * 70)
-        print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
-        print("=" * 70)
+        #print("\n" + "=" * 70)
+        #print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
+        #print("=" * 70)
 
         # Train on synthetic data
-        train_stats = evaluator.train_hybrid_model(classifier='xgboost')
+        #train_stats = evaluator.train_hybrid_model(classifier='xgboost')
 
-        print("\n" + "=" * 70)
-        print("STEP 3: TEST HYBRID MODEL ON DEV SET")
-        print("=" * 70)
+        #print("\n" + "=" * 70)
+        #print("STEP 3: TEST HYBRID MODEL ON DEV SET")
+        #print("=" * 70)
 
         # Test on dev set
-        test_result = evaluator.test_hybrid_model(verbose=True)
+        #test_result = evaluator.test_hybrid_model(verbose=True)
         # Error analysis
-        error_stats = evaluator.analyze_errors(test_result, verbose=True)
+        #error_stats = evaluator.analyze_errors(test_result, verbose=True)
         # Feature importance analysis
-        importance_stats = evaluator.analyze_feature_importance(plot=True)
+        #importance_stats = evaluator.analyze_feature_importance(plot=True)
 
         # Final summary
-        print("\n" + "=" * 70)
-        print("FINAL COMPARISON")
-        print("=" * 70)
+        #print("\n" + "=" * 70)
+        #print("FINAL COMPARISON")
+        #print("=" * 70)
 
-        results_summary = []
-        if text_result:
-            results_summary.append(('Text-only (SBERT)', text_result['accuracy']))
-        if drs_cosine:
-            results_summary.append(('DRS-only (cosine)', drs_cosine['accuracy']))
-        if drs_aggregate:
-            results_summary.append(('DRS-only (aggregate)', drs_aggregate['accuracy']))
-        if hybrid_simple:
-            results_summary.append(('Hybrid (simple avg)', hybrid_simple['accuracy']))
-        if test_result:
-            results_summary.append(('Hybrid (trained RF)', test_result['accuracy']))
+        #results_summary = []
+        #if text_result:
+        #    results_summary.append(('Text-only (SBERT)', text_result['accuracy']))
+        #if drs_cosine:
+        #    results_summary.append(('DRS-only (cosine)', drs_cosine['accuracy']))
+        #if drs_aggregate:
+        #    results_summary.append(('DRS-only (aggregate)', drs_aggregate['accuracy']))
+        #if hybrid_simple:
+        #    results_summary.append(('Hybrid (simple avg)', hybrid_simple['accuracy']))
+        #if test_result:
+        #    results_summary.append(('Hybrid (trained RF)', test_result['accuracy']))
 
-        results_summary.sort(key=lambda x: x[1], reverse=True)
+        #results_summary.sort(key=lambda x: x[1], reverse=True)
 
-        for i, (name, acc) in enumerate(results_summary, 1):
-            print(f"{i}. {name:25s}: {acc:.3f}")
+        #for i, (name, acc) in enumerate(results_summary, 1):
+        #    print(f"{i}. {name:25s}: {acc:.3f}")
 
     else:
         print("\nUsage:")

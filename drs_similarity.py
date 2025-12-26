@@ -470,7 +470,7 @@ class DRSSimilarity:
 
         # If both are empty, they are "similarly empty" (neutral)
         if not lp1 and not lp2:
-            return 0.5
+            return 0.0
             # If only one is empty, we don't have enough logic info to compare
         if not lp1 or not lp2:
             return 0.0
