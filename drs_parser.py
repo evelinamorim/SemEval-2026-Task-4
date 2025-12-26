@@ -78,6 +78,30 @@ class DRSParser:
         except:
             return []
 
+    def get_logic_enriched_distribution(self):
+        """
+        Instead of counting 'run-51.3', count 'motion'.
+        This makes the distribution much DENSER.
+        """
+        from nltk.corpus import verbnet as vn
+        enriched = Counter()
+        for event in self.events:
+            vn_class = self._normalize_event(event.get('text', ''))
+            if '-' in vn_class:
+                try:
+                    # Get the VERY FIRST predicate (the primary action logic)
+                    preds = vn.vnclass(vn_class).findall('SEMANTICS/PRED')
+                    if preds:
+                        primary_logic = preds[0].get('value')
+                        enriched[primary_logic] += 1
+                    else:
+                        enriched[vn_class] += 1 # Fallback to class
+                except:
+                    enriched[event.get('text', 'unknown')] += 1
+            else:
+                enriched[event.get('text', 'unknown')] += 1
+        return enriched
+
     def get_logic_predicate_distribution(self):
         """Count high-level VerbNet predicates (e.g., motion, cause, transfer)."""
         from nltk.corpus import verbnet as vn
@@ -573,7 +597,7 @@ class DRSParser:
             #'verbnet_class_diversity': len(vn_classes) / max(len(self.events), 1),
             #'dominant_verbnet_class': vn_classes.most_common(1)[0][0] if vn_classes else None,
             #'verbnet_class_distribution':vn_dist,
-            'logic_predicates': self.get_logic_predicate_distribution()
+            'logic_predicates': self.get_logic_enriched_distribution()
         }
 
     def get_event_bigrams(self):

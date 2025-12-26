@@ -459,32 +459,33 @@ class DRSSimilarity:
             import traceback
             traceback.print_exc()
 
-
     def logic_predicate_similarity(self):
         """
-        Similarity between high-level VerbNet logic (motion, cause, etc.).
-        Helps capture the Causal dimension of narrative similarity.
+        Similarity between enriched VerbNet logic.
+        Uses 'logic_enriched' key from the DRSParser feature vector.
         """
-        # 1. Get the dictionaries from the feature vectors
-        lp1 = self.feat1.get('logic_predicates', {})
-        lp2 = self.feat2.get('logic_predicates', {})
+        # 1. Get the enriched dictionaries
+        lp1 = self.feat1.get('logic_enriched', {})
+        lp2 = self.feat2.get('logic_enriched', {})
 
-        # If either story has no identifiable predicates, similarity is 0
+        # If both are empty, they are "similarly empty" (neutral)
+        if not lp1 and not lp2:
+            return 0.5
+            # If only one is empty, we don't have enough logic info to compare
         if not lp1 or not lp2:
             return 0.0
 
-        # 2. Align the keys to create vectors
         all_predicates = set(lp1.keys()) | set(lp2.keys())
         vec1 = np.array([lp1.get(p, 0) for p in all_predicates])
         vec2 = np.array([lp2.get(p, 0) for p in all_predicates])
 
-        # 3. Calculate Cosine Similarity
         norm1 = np.linalg.norm(vec1)
         norm2 = np.linalg.norm(vec2)
 
         if norm1 == 0 or norm2 == 0:
             return 0.0
 
+        # 1 - cosine distance = cosine similarity
         return 1 - cosine(vec1, vec2)
 
     def aggregate_similarity(self, weights=None):

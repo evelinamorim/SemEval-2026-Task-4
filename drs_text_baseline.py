@@ -936,7 +936,8 @@ class HybridEvaluator:
 
     def evaluate_hybrid_simple(self, dataset='test', verbose=False):
         """
-        Simple hybrid: average of DRS + text similarity.
+        Simple hybrid: weighted sum of DRS + text similarity.
+        Optimized to handle sparse logic features separately.
         """
         if dataset == 'train':
             data_source = self.train_data
@@ -950,56 +951,54 @@ class HybridEvaluator:
             return None
 
         print("\n" + "=" * 60)
-        print(f"EVALUATING: HYBRID (Simple Average) on {data_name} SET")
+        print(f"EVALUATING: HYBRID (Weighted Simple) on {data_name} SET")
         print("=" * 60)
 
         results = []
 
         for idx, item in enumerate(data_source):
             hybrid_feat = self.extract_hybrid_features(idx, dataset)
+            if hybrid_feat is None: continue
 
-            if hybrid_feat is None:
-                continue
-
-            # OLD VERSION (just cosine):
-            # drs_a = hybrid_feat['drs_features']['sims_a']['cosine']
-            # drs_b = hybrid_feat['drs_features']['sims_b']['cosine']
-
-            # NEW VERSION (better - combine multiple DRS metrics):
             sims_a = hybrid_feat['drs_features']['sims_a']
             sims_b = hybrid_feat['drs_features']['sims_b']
 
-            # Combine cosine + verbnet_distribution (if available)
-            drs_metrics_a = []
-            if 'cosine' in sims_a:
-                drs_metrics_a.append(sims_a['cosine'])
-            if 'verbnet_distribution' in sims_a:  # After you add feature #2
-                drs_metrics_a.append(sims_a['verbnet_distribution'])
-            if 'logic_sim' in sims_a: drs_metrics_a.append(sims_a['logic_sim'])
+            # INDIVIDUAL DRS COMPONENTS
+            drs_cos_a = sims_a.get('cosine', 0.0)
+            drs_log_a = sims_a.get('logic_sim', 0.0)
 
-            drs_a = sum(drs_metrics_a) / len(drs_metrics_a) if drs_metrics_a else 0.0
+            drs_cos_b = sims_b.get('cosine', 0.0)
+            drs_log_b = sims_b.get('logic_sim', 0.0)
 
-            drs_metrics_b = []
-            if 'cosine' in sims_b:
-                drs_metrics_b.append(sims_b['cosine'])
-            if 'verbnet_distribution' in sims_b:
-                drs_metrics_b.append(sims_b['verbnet_distribution'])
-            if 'logic_sim' in sims_b: drs_metrics_b.append(sims_b['logic_sim'])
-
-            drs_b = sum(drs_metrics_b) / len(drs_metrics_b) if drs_metrics_b else 0.0
-
-            # Text similarities (unchanged)
+            # TEXT COMPONENT
             text_a = hybrid_feat['text_features']['sim_a']
             text_b = hybrid_feat['text_features']['sim_b']
 
-            # Combine DRS + Text
-            combined_a = (0.6 * text_a) + (0.4 * drs_a)
-            combined_b = (0.6 * text_b) + (0.4 * drs_b)
+            # THE "STABLE" WEIGHTING FORMULA
+            # 65% Text (Reliable)
+            # 30% DRS Structure (The part that got you 0.64)
+            # 05% Logic Bonus (Small enough not to ruin the score if sparse)
 
-            predicted_a_is_closer = combined_a > combined_b
+            w_text, w_struct, w_logic = 0.65, 0.30, 0.05
+
+            score_a = (w_text * text_a) + (w_struct * drs_cos_a) + (w_logic * drs_log_a)
+            score_b = (w_text * text_b) + (w_struct * drs_cos_b) + (w_logic * drs_log_b)
+
+            # --- DIAGNOSTIC PRINT TEST ---
+            # Print specifically when Logic and Structure disagree
+            logic_disagrees = (drs_log_a > drs_log_b) != (drs_cos_a > drs_cos_b)
+            if verbose and logic_disagrees:
+                print(f"\n[DIAGNOSTIC {idx}] Conflict Found:")
+                print(f"  A: Text={text_a:.2f}, Struct={drs_cos_a:.2f}, Logic={drs_log_a:.2f} -> Score: {score_a:.3f}")
+                print(f"  B: Text={text_b:.2f}, Struct={drs_cos_b:.2f}, Logic={drs_log_b:.2f} -> Score: {score_b:.3f}")
+                print(
+                    f"  Logic preferred {'A' if drs_log_a > drs_log_b else 'B'}, but Structure preferred {'A' if drs_cos_a > drs_cos_b else 'B'}")
+            # ------------------------------
+
+            predicted_a_is_closer = score_a > score_b
+            # ... (rest of the evaluation logic) ...
             ground_truth = item['text_a_is_closer']
             correct = predicted_a_is_closer == ground_truth
-            # In evaluate_hybrid_simple(), in the loop
 
             results.append({
                 'idx': idx,
@@ -1008,25 +1007,20 @@ class HybridEvaluator:
                 'correct': correct
             })
 
-            if verbose:
+            if verbose and idx % 20 == 0: # Print every 20th for brevity
                 status = "✓" if correct else "✗"
-                print(f"{status} [{idx}] A={combined_a:.3f}, B={combined_b:.3f}")
-
-        if len(results) == 0:
-            print("No DRS files found!")
-            return None
+                print(f"{status} [{idx}] Text: {text_a:.2f} vs {text_b:.2f} | DRS: {drs_cos_a:.2f} vs {drs_cos_b:.2f}")
 
         accuracy = sum(r['correct'] for r in results) / len(results)
 
         print(f"\nAccuracy: {accuracy:.3f} ({sum(r['correct'] for r in results)}/{len(results)})")
-        print(f"Coverage: {len(results)}/{len(data_source)} instances")
-
         return {
-            'method': 'hybrid_simple',
+            'method': 'hybrid_simple_weighted',
             'accuracy': accuracy,
             'results': results,
             'dataset': dataset
         }
+        
 
     def evaluate_hybrid_ml(self, classifier='logistic', cv_folds=5, verbose=False):
         """
