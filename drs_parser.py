@@ -79,27 +79,33 @@ class DRSParser:
             return []
 
     def get_logic_enriched_distribution(self):
-        """
-        Instead of counting 'run-51.3', count 'motion'.
-        This makes the distribution much DENSER.
-        """
         from nltk.corpus import verbnet as vn
         enriched = Counter()
+
         for event in self.events:
             vn_class = self._normalize_event(event.get('text', ''))
+
+            # Strategy 1: Try to get deep semantic predicates
+            success = False
             if '-' in vn_class:
                 try:
-                    # Get the VERY FIRST predicate (the primary action logic)
-                    preds = vn.vnclass(vn_class).findall('SEMANTICS/PRED')
+                    # NLTK VerbNet lookup
+                    cls_data = vn.vnclass(vn_class)
+                    preds = cls_data.findall('SEMANTICS/PRED')
                     if preds:
-                        primary_logic = preds[0].get('value')
-                        enriched[primary_logic] += 1
-                    else:
-                        enriched[vn_class] += 1 # Fallback to class
+                        for p in preds:
+                            enriched[p.get('value')] += 1
+                        success = True
                 except:
-                    enriched[event.get('text', 'unknown')] += 1
-            else:
-                enriched[event.get('text', 'unknown')] += 1
+                    pass  # Lookup failed, move to fallback
+
+            # Strategy 2: Fallback to the Class Name or Lemma
+            if not success:
+                # If it's 'contiguous_location-47.8', take 'contiguous_location'
+                # If it's just a lemma like 'chronicles', take that.
+                logic_label = vn_class.split('-')[0] if '-' in vn_class else vn_class
+                enriched[logic_label] += 1
+
         return enriched
 
     def get_logic_predicate_distribution(self):
@@ -175,17 +181,50 @@ class DRSParser:
             DRSParser._verbnet_missing.add(verb)
             return verb  # Return lemma if no VerbNet class
 
-    def parse(self):
-        """Main parsing function."""
-        with open(self.filepath, 'r', encoding='utf-8') as f:
-            content = f.read()
+    def _split_sections(self, content):
+        """
+        Robustly splits DRS content into sections, handling special characters
+        like '»' and optional brackets/punctuation.
+        """
+        sections = {}
 
-        # Split into sections
+        # Define the possible headers we are looking for
+        # This regex matches things like: » EVENTS, [EVENTS], EVENTS:, events
+        header_pattern = r'(?:^|\n)(?:[^\w\s]*)\s*(EVENTS|ACTORS|RELATIONS|ATTRIBUTES|TIMEX)(?:\s*[:\]]*)'
+
+        # Find all header positions and labels
+        matches = list(re.finditer(header_pattern, content, re.IGNORECASE))
+
+        for i, match in enumerate(matches):
+            header_name = match.group(1).upper()
+            start_pos = match.end()
+            # The section ends where the next header begins, or at the end of the file
+            end_pos = matches[i + 1].start() if i + 1 < len(matches) else len(content)
+
+            sections[header_name] = content[start_pos:end_pos].strip()
+
+        return sections
+
+    def parse(self):
+        """Main parsing function with robust section splitting."""
+        try:
+            with open(self.filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except UnicodeDecodeError:
+            # Fallback for different encodings if necessary
+            with open(self.filepath, 'r', encoding='latin-1') as f:
+                content = f.read()
+
+        # Split into sections using the robust regex logic
         sections = self._split_sections(content)
 
-        # Parse each section
+        # Parse each section if found
         if 'EVENTS' in sections:
             self.events = self._parse_events(sections['EVENTS'])
+        else:
+            # DEBUG: Help identify if the splitter still fails
+            if "5_" in self.filepath:
+                print(f"DEBUG: 'EVENTS' section not detected in {self.filepath}")
 
         if 'ACTORS' in sections:
             self.actors = self._parse_actors(sections['ACTORS'])
@@ -606,7 +645,7 @@ class DRSParser:
             # participant tracking
             'participant_roles': self.get_participant_role_links(),
             'unique_actors': list(set(self.get_participant_role_links())),
-            'logic_predicates': self.get_logic_enriched_distribution()
+            'logic_predicates': list(self.get_logic_enriched_distribution().keys())
         }
 
     def get_event_bigrams(self):
