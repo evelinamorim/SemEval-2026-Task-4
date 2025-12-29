@@ -1000,12 +1000,25 @@ class HybridEvaluator:
                 'correct': correct
             })
 
-            if verbose and (not correct or idx % 50 == 0):
-                status = "✓" if correct else "✗"
+            if verbose and not correct:
+                print(f"\n{'!' * 20} FAILURE AT INDEX {idx} {'!' * 20}")
+                print(f"ANCHOR: {item['anchor']}")
+                print(f"STORY A: {item['text_a']}")
+                print(f"STORY B: {item['text_b']}")
+                print("-" * 50)
+                print(f"GROUND TRUTH: {'Story A' if ground_truth else 'Story B'} is closer")
+                print(f"PREDICTED:    {'Story A' if predicted_a_is_closer else 'Story B'} is closer")
                 print(
-                    f"{status} [{idx}] Score A: {score_a:.3f} (Text:{text_a:.2f}, Struct:{drs_cos_a:.2f}, Temp:{drs_temp_a:.2f})")
+                    f"METRICS A: Text:{text_a:.2f}, Struct:{drs_cos_a:.2f}, Temp:{drs_temp_a:.2f} -> Score: {score_a:.3f}")
                 print(
-                    f"      Score B: {score_b:.3f} (Text:{text_b:.2f}, Struct:{drs_cos_b:.2f}, Temp:{drs_temp_b:.2f})")
+                    f"METRICS B: Text:{text_b:.2f}, Struct:{drs_cos_b:.2f}, Temp:{drs_temp_b:.2f} -> Score: {score_b:.3f}")
+
+                # Check for "The Bully Feature"
+                if drs_cos_a > 0.90 and text_a < 0.50:
+                    print("DIAGNOSTIC: Story A has SUSPICIOUSLY high structural similarity.")
+                if drs_temp_a == 0.0 and drs_temp_b == 0.0:
+                    print("DIAGNOSTIC: Temporal signal is missing (Sparsity Trap).")
+                print('!' * 50)
 
         accuracy = sum(r['correct'] for r in results) / len(results)
 
