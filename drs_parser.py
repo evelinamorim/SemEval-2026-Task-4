@@ -531,72 +531,54 @@ class DRSParser:
 
     def get_feature_vector(self):
         """
-        Extract complete feature vector from DRS.
-
-        Returns:
-            dict: All extracted features
+        Extract complete feature vector from DRS, normalized by event volume.
         """
         event_types = self.get_event_type_distribution()
         tenses = self.get_tense_distribution()
         aspects = self.get_aspect_distribution()
         temp_rels = self.get_temporal_relation_types()
         sem_rels = self.get_semantic_relation_types()
-        vn_classes = self.get_verbnet_class_distribution()
 
-        vn_dist = self.get_verbnet_class_distribution()
+        # Base denominator for normalization
+        num_events = max(self.get_event_count(), 1)
 
         return {
-            # Basic counts
+            # Core Density (Keep these as they are high-level structural signals)
             'event_count': self.get_event_count(),
-            'actor_count': self.get_actor_count(),
-            'relation_count': self.get_relation_count(),
-            'temporal_relation_count': len(self.temporal_relations),
-            'semantic_relation_count': len(self.semantic_relations),
-
-            # Event type distribution
-            'state_count': event_types.get('State', 0),
-            'process_count': event_types.get('Process', 0),
-            'transition_count': event_types.get('Transition', 0),
-            'state_ratio': event_types.get('State', 0) / max(self.get_event_count(), 1),
-            'process_ratio': event_types.get('Process', 0) / max(self.get_event_count(), 1),
-            'transition_ratio': event_types.get('Transition', 0) / max(self.get_event_count(), 1),
-
-            # Tense distribution
-            'past_count': tenses.get('Past', 0),
-            'present_count': tenses.get('Present', 0),
-            'future_count': tenses.get('Future', 0),
-
-            # Aspect distribution
-            'perfective_count': aspects.get('Perfective', 0),
-            'progressive_count': aspects.get('Progressive', 0),
-
-            # Temporal relations
-            'occurs_before_count': temp_rels.get('occursBefore', 0),
-            'occurs_after_count': temp_rels.get('occursAfter', 0),
-            'overlaps_count': temp_rels.get('overlaps', 0),
-            'during_count': temp_rels.get('during', 0),
-            'result_state_count': temp_rels.get('resultState', 0),
-
-            # Density metrics
             'temporal_density': self.get_temporal_density(),
-            'relation_density': self.get_relation_count() / max(self.get_event_count(), 1),
+            'relation_density': self.get_relation_count() / num_events,
 
-            # Semantic relations
-            'agent_count': sem_rels.get('agent', 0),
-            'patient_count': sem_rels.get('patient', 0),
-            'coreference_count': sem_rels.get('objIdentity', 0),
+            # Normalizing Participants
+            'actor_ratio': self.get_actor_count() / num_events,
 
-            'event_bigrams':self.get_event_bigrams(),
-            'event_trigrams':self.get_event_trigrams(),
+            # Event Type Ratios (Already in your code, keeping them)
+            'state_ratio': event_types.get('State', 0) / num_events,
+            'process_ratio': event_types.get('Process', 0) / num_events,
+            'transition_ratio': event_types.get('Transition', 0) / num_events,
 
-            # Raw data for semantic comparison
-            'events': self.events,
-            'temporal_relations_raw': self.temporal_relations,
+            # Tense Ratios (NEW: replacing _count with _ratio)
+            'past_ratio': tenses.get('Past', 0) / num_events,
+            'present_ratio': tenses.get('Present', 0) / num_events,
+            'future_ratio': tenses.get('Future', 0) / num_events,
 
-            #'verbnet_class_count': len(vn_classes),
-            #'verbnet_class_diversity': len(vn_classes) / max(len(self.events), 1),
-            #'dominant_verbnet_class': vn_classes.most_common(1)[0][0] if vn_classes else None,
-            #'verbnet_class_distribution':vn_dist,
+            # Aspect Ratios (NEW: replacing _count with _ratio)
+            'perfective_ratio': aspects.get('Perfective', 0) / num_events,
+            'progressive_ratio': aspects.get('Progressive', 0) / num_events,
+
+            # Temporal Relation Ratios (NEW: replacing _count with _ratio)
+            'occurs_before_ratio': temp_rels.get('occursBefore', 0) / num_events,
+            'occurs_after_ratio': temp_rels.get('occursAfter', 0) / num_events,
+            'overlaps_ratio': temp_rels.get('overlaps', 0) / num_events,
+            'during_ratio': temp_rels.get('during', 0) / num_events,
+
+            # Semantic Relation Ratios (NEW: replacing _count with _ratio)
+            'agent_ratio': sem_rels.get('agent', 0) / num_events,
+            'patient_ratio': sem_rels.get('patient', 0) / num_events,
+            'coreference_ratio': sem_rels.get('objIdentity', 0) / num_events,
+
+            # Keeping the complex semantic features as they are (they are already set-like)
+            'event_bigrams': self.get_event_bigrams(),
+            'event_trigrams': self.get_event_trigrams(),
             'logic_predicates': self.get_logic_enriched_distribution()
         }
 
