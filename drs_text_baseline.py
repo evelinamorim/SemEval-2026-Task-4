@@ -982,8 +982,11 @@ class HybridEvaluator:
             # Calculate Length Ratio (0.0 to 1.0)
             # If Anchor has 10 nodes and Story A has 10, ratio is 1.0.
             # If Anchor has 10 and Story B has 50, ratio is 0.2.
-            ratio_a = min(nodes_anchor, nodes_a) / max(nodes_anchor, nodes_a)
-            ratio_b = min(nodes_anchor, nodes_b) / max(nodes_anchor, nodes_b)
+            raw_ratio_a = min(nodes_anchor, nodes_a) / max(nodes_anchor, nodes_a)
+            raw_ratio_b = min(nodes_anchor, nodes_b) / max(nodes_anchor, nodes_b)
+
+            ratio_a = np.sqrt(raw_ratio_a)
+            ratio_b = np.sqrt(raw_ratio_b)
 
             # Normalized Structural Scores
             norm_struct_a = drs_cos_a * ratio_a
