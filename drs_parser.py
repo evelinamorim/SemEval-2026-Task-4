@@ -226,19 +226,23 @@ class DRSParser:
         """
         events = []
         lines = events_section.split('\n')
+        position = 0
 
-        i = 0
-        position = 0  # NEW: track document position
-        while i < len(lines):
-            line = lines[i].strip()
-
-            # Look for event header: # T40 (follows) -> a
+        for i, line in enumerate(lines):
+            line = line.strip()
+            # Look for event header: # T40 (word) -> variable
             if line.startswith('#') and '->' in line:
-                event = self._parse_event_entry(line, lines[i:i + 3])
+                # Look ahead for FOL/DRS lines until the next # or end
+                context = []
+                for j in range(i + 1, min(i + 5, len(lines))):
+                    if lines[j].strip().startswith('#'): break
+                    context.append(lines[j])
+
+                event = self._parse_event_entry(line, context)
                 if event:
-                    event['position'] = position  # NEW: add position
+                    event['position'] = position
                     events.append(event)
-                    position += 1  # NEW: increment
+                    position += 1
                 i += 3  # Skip FOL and DRS lines
             else:
                 i += 1
@@ -463,6 +467,25 @@ class DRSParser:
 
     # ========== Feature Extraction Methods ==========
 
+    def get_participant_role_links(self):
+        """
+        Link actors to their semantic roles (Agent, Patient, etc.).
+        Returns a list of 'role:actor_lemma' strings.
+        """
+        links = []
+        nlp = _get_spacy_model()
+        for rel in self.semantic_relations:
+            actor_id = rel['source']
+            role = rel['type']
+            if actor_id in self.actors:
+                # Clean and lemmatize actor (e.g., "The humans" -> "human")
+                text = self.actors[actor_id].lower()
+                doc = nlp(text)
+                lemma = " ".join([t.lemma_ for t in doc if not t.is_stop and t.pos_ in ['NOUN', 'PROPN']])
+                if lemma:
+                    links.append(f"{role}:{lemma}")
+        return links
+
     def get_event_count(self):
         """Total number of events."""
         return len(self.events)
@@ -579,6 +602,10 @@ class DRSParser:
             # Keeping the complex semantic features as they are (they are already set-like)
             'event_bigrams': self.get_event_bigrams(),
             'event_trigrams': self.get_event_trigrams(),
+
+            # participant tracking
+            'participant_roles': self.get_participant_role_links(),
+            'unique_actors': list(set(self.get_participant_role_links())),
             'logic_predicates': self.get_logic_enriched_distribution()
         }
 

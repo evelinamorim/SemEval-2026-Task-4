@@ -998,7 +998,7 @@ class HybridEvaluator:
             temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
 
             # 4. FINAL WEIGHTED SCORE
-            w_text, w_struct, w_temp = 0.70, 0.20, 0.10
+            w_text, w_struct, w_temp = 0.60, 0.40, 0
 
             score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
             score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
@@ -1222,7 +1222,7 @@ if __name__ == "__main__":
         #text_result = evaluator.evaluate_text_only(dataset='test')
         #drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
         #drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
-        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=True)
+        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=False)
 
         #print("\n" + "=" * 70)
         #print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
