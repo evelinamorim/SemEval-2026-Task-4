@@ -232,9 +232,9 @@ class HybridEvaluator:
             a_feat = a_parser.get_feature_vector()
             b_feat = b_parser.get_feature_vector()
 
-            nodes_anchor = len(anchor_feat.get('events', []))
-            nodes_a = len(a_feat.get('events', []))
-            nodes_b = len(b_feat.get('events', []))
+            nodes_anchor = anchor_feat.get('event_count', [])
+            nodes_a = a_feat.get('event_count', [])
+            nodes_b = b_feat.get('event_count', [])
 
             # Fallback to 1 to avoid division by zero in normalization
             nodes_anchor = max(1, nodes_anchor)
@@ -248,6 +248,7 @@ class HybridEvaluator:
             # Get all similarity metrics
             try:
                 drs_sims_a = sim_anchor_a.compute_all_similarities()
+                drs_sims_a['aggregate'] = sim_anchor_a.aggregate_similarity()
             except Exception as e:
                 print(f"\n!!! ERROR in DRSSimilarity for anchor-A at idx {idx}:")
                 print(f"    {type(e).__name__}: {e}")
@@ -257,6 +258,7 @@ class HybridEvaluator:
 
             try:
                 drs_sims_b = sim_anchor_b.compute_all_similarities()
+                drs_sims_b['aggregate'] = sim_anchor_b.aggregate_similarity()
             except Exception as e:
                 print(f"\n!!! ERROR in DRSSimilarity for anchor-B at idx {idx}:")
                 print(f"    {type(e).__name__}: {e}")
@@ -953,7 +955,7 @@ class HybridEvaluator:
             return None
 
         print("\n" + "=" * 60)
-        print(f"EVALUATING: HYBRID (Strategy A: Length Norm) on {data_name} SET")
+        print(f"EVALUATING: HYBRID (HYbrid Simple) on {data_name} SET")
         print("=" * 60)
 
         results = []
