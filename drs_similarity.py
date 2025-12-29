@@ -437,6 +437,20 @@ class DRSSimilarity:
 
         return min(c1, c2) / max(c1, c2) if max(c1, c2) > 0 else 0.0
 
+    def _compute_jaccard_similarity(self, list1, list2):
+        """Computes Jaccard similarity between two lists of tokens/labels."""
+        set1 = set(list1) if list1 else set()
+        set2 = set(list2) if list2 else set()
+
+        if not set1 and not set2:
+            return 1.0  # Both empty is a match
+        if not set1 or not set2:
+            return 0.0
+
+        intersection = len(set1.intersection(set2))
+        union = len(set1.union(set2))
+        return intersection / union
+
     def compute_all_similarities(self):
         """
         Compute all similarity metrics.
@@ -445,6 +459,15 @@ class DRSSimilarity:
             dict: All similarity scores
         """
         try:
+            role_sim = self._compute_jaccard_similarity(
+                self.feat1.get('participant_roles', []),
+                self.feat2.get('participant_roles', [])
+            )
+
+            logic_sim = self._compute_jaccard_similarity(
+                self.feat1.get('logic_keys', []),
+                self.feat2.get('logic_keys', [])
+            )
             return {
                 'cosine': self.cosine_similarity(),
                 'euclidean': self.euclidean_distance(),
@@ -457,7 +480,9 @@ class DRSSimilarity:
                 'event_trigram': self.event_trigram_similarity(),
                 'temporal_relation_semantic': self.temporal_relation_semantic_similarity(),
                 #'verbnet_distribution':self.verbnet_distribution_similarity(),
-                'logic_sim': self.logic_predicate_similarity()
+                'logic_sim': self.logic_predicate_similarity(),
+                'role_overlap': role_sim,
+                'logic_overlap': logic_sim,
             }
         except Exception as e:
             print(f"ERROR in similarity computation: {e}")

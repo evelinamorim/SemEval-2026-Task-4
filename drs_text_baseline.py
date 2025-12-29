@@ -1222,7 +1222,7 @@ if __name__ == "__main__":
         #text_result = evaluator.evaluate_text_only(dataset='test')
         #drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
         #drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
-        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=False)
+        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=True)
 
         #print("\n" + "=" * 70)
         #print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
