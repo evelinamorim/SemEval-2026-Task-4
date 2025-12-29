@@ -226,43 +226,48 @@ class DRSSimilarity:
         return tuples
 
     def temporal_relation_semantic_similarity(self):
-        """Compare temporal relations using semantic similarity."""
+        # 1. Macro-Category Mapping (The "Fuzzy" Fix)
+        # Group relations that are structurally similar
+        type_groups = {
+            'BEFORE': ['occursBefore', 'occursAfter', 'isIncludedIn'],
+            'OVERLAP': ['overlaps', 'during', 'contains', 'starts', 'finishes'],
+        }
 
-        # Get temporal relations
-        temp_rels_1 = self._extract_temporal_relation_tuples(self.feat1)
-        temp_rels_2 = self._extract_temporal_relation_tuples(self.feat2)
+        def get_group(rel):
+            for group, members in type_groups.items():
+                if rel in members: return group
+            return rel
 
-        # DEBUG
-        #print(f"  Relations extracted:")
-        #print(f"    Story 1: {len(temp_rels_1)} total")
-        #print(f"    Story 2: {len(temp_rels_2)} total")
+        rels1 = self._extract_temporal_relation_tuples(self.feat1)
+        rels2 = self._extract_temporal_relation_tuples(self.feat2)
 
-        if len(temp_rels_1) == 0 or len(temp_rels_2) == 0:
-            #print(f"  → Similarity: 0.0 (empty)")
-            return 0.0
+        # 2. Handling Sparsity (The "Neutral" Fix)
+        # If BOTH lack structure, they are 'similar' in their simplicity.
+        if not rels1 and not rels2: return 1.0
+        # If only one lacks structure, it's a neutral signal, not a failure.
+        if not rels1 or not rels2: return 0.5
 
-        phrases_1 = [f"{e1} {e2}" for _, e1, e2 in temp_rels_1]
-        phrases_2 = [f"{e3} {e4}" for _, e3, e4 in temp_rels_2]
+        emb1 = _get_bert_embeddings_batch([f"{e1} {e2}" for _, e1, e2 in rels1])
+        emb2 = _get_bert_embeddings_batch([f"{e1} {e2}" for _, e1, e2 in rels2])
 
-        emb_1 = _get_bert_embeddings_batch(phrases_1)
-        emb_2 = _get_bert_embeddings_batch(phrases_2)
+        # 3. Symmetric Max-Alignment
+        def get_half_sim(e_a, r_a, e_b, r_b):
+            scores = []
+            for i, (type_a, _, _) in enumerate(r_a):
+                max_s = 0.0
+                for j, (type_b, _, _) in enumerate(r_b):
+                    # Use Macro-Groups instead of exact strings
+                    type_bonus = 1.0 if get_group(type_a) == get_group(type_b) else 0.5
 
-        # Compare
-        similarities = []
-        for i, (rel1_type, _, _) in enumerate(temp_rels_1):
-            max_sim = 0.0
-            for j, (rel2_type, _, _) in enumerate(temp_rels_2):
-                if rel1_type != rel2_type:
-                    continue
+                    cos_sim = np.dot(e_a[i], e_b[j]) / (np.linalg.norm(e_a[i]) * np.linalg.norm(e_b[j]))
+                    max_s = max(max_s, cos_sim * type_bonus)
+                scores.append(max_s)
+            return np.mean(scores)
 
-                sim = np.dot(emb_1[i], emb_2[j]) / (
-                        np.linalg.norm(emb_1[i]) * np.linalg.norm(emb_2[j])
-                )
-                max_sim = max(max_sim, sim)
+        sim_a_to_b = get_half_sim(emb1, rels1, emb2, rels2)
+        sim_b_to_a = get_half_sim(emb2, rels2, emb1, rels1)
 
-            similarities.append(max_sim)
-
-        return np.mean(similarities) if similarities else 0.0
+        return (sim_a_to_b + sim_b_to_a) / 2
 
     def temporal_relation_similarity(self):
         """
