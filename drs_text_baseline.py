@@ -232,6 +232,15 @@ class HybridEvaluator:
             a_feat = a_parser.get_feature_vector()
             b_feat = b_parser.get_feature_vector()
 
+            nodes_anchor = len(anchor_feat.get('events', []))
+            nodes_a = len(a_feat.get('events', []))
+            nodes_b = len(b_feat.get('events', []))
+
+            # Fallback to 1 to avoid division by zero in normalization
+            nodes_anchor = max(1, nodes_anchor)
+            nodes_a = max(1, nodes_a)
+            nodes_b = max(1, nodes_b)
+
             # Compute DRS similarities
             sim_anchor_a = DRSSimilarity(anchor_feat, a_feat)
             sim_anchor_b = DRSSimilarity(anchor_feat, b_feat)
@@ -255,19 +264,6 @@ class HybridEvaluator:
                 traceback.print_exc()
                 return None
 
-            # DEBUG: Check if new features exist
-            # if idx < 3:  # Only print first 3 to avoid spam
-            #    print(f"\nDEBUG idx {idx}:")
-            #    print(f"  Keys in similarities: {sorted(drs_sims_a.keys())}")
-            #    if 'event_sequence' in drs_sims_a:
-            #        print(f"  event_sequence A: {drs_sims_a['event_sequence']:.3f}, B: {drs_sims_b['event_sequence']:.3f}")
-            #    else:
-            #        print(f"  event_sequence: NOT FOUND")
-            #    if 'event_trigram' in drs_sims_a:
-            #        print(f"  event_trigram A: {drs_sims_a['event_trigram']:.3f}, B: {drs_sims_b['event_trigram']:.3f}")
-            #    else:
-            #        print(f"  event_trigram: NOT FOUND")
-
             # Create feature vector: [sim(anchor,A) for each metric, sim(anchor,B) for each metric]
             feature_names = sorted(drs_sims_a.keys())
 
@@ -281,7 +277,10 @@ class HybridEvaluator:
                 'features': np.array(features),
                 'feature_names': feature_names,
                 'sims_a': drs_sims_a,
-                'sims_b': drs_sims_b
+                'sims_b': drs_sims_b,
+                'nodes_anchor_count': nodes_anchor,
+                'nodes_a_count': nodes_a,
+                'nodes_b_count': nodes_b
             }
         except Exception as e:
             print(f"Warning: Error parsing DRS for idx {idx} in {dataset} set: {e}")
@@ -368,7 +367,10 @@ class HybridEvaluator:
         return {
             'features': combined,
             'drs_features': drs_feat,
-            'text_features': text_feat
+            'text_features': text_feat,
+            'nodes_anchor_count':drs_feat['nodes_anchor_count'],
+            'nodes_a_count': drs_feat['nodes_a_count'],
+            'nodes_b_count': drs_feat['nodes_b_count'],
         }
 
     def train_hybrid_model(self, classifier='random_forest', verbose=True):
