@@ -997,8 +997,8 @@ class HybridEvaluator:
             temp_a = drs_feats.get('sims_a', {}).get('temporal_relation_semantic', 0.5)
             temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
 
-            # 4. FINAL WEIGHTED SCORE (60/20/20)
-            w_text, w_struct, w_temp = 0.60, 0.20, 0.20
+            # 4. FINAL WEIGHTED SCORE
+            w_text, w_struct, w_temp = 0.70, 0.20, 0.10
 
             score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
             score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
