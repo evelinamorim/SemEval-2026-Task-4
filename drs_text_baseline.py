@@ -979,14 +979,15 @@ class HybridEvaluator:
             nodes_a = drs_feats.get('nodes_a_count', 1)
             nodes_b = drs_feats.get('nodes_b_count', 1)
 
-            # Calculate Length Ratio (0.0 to 1.0)
-            # If Anchor has 10 nodes and Story A has 10, ratio is 1.0.
-            # If Anchor has 10 and Story B has 50, ratio is 0.2.
-            raw_ratio_a = min(nodes_anchor, nodes_a) / max(nodes_anchor, nodes_a)
-            raw_ratio_b = min(nodes_anchor, nodes_b) / max(nodes_anchor, nodes_b)
+            def calculate_asymmetric_ratio(anchor_n, story_n):
+                if story_n >= anchor_n:
+                    return np.power(anchor_n / story_n, 0.2)
+                else:
+                    # Standard penalty for "missing" information
+                    return story_n / anchor_n
 
-            ratio_a = np.sqrt(raw_ratio_a)
-            ratio_b = np.sqrt(raw_ratio_b)
+            ratio_a = calculate_asymmetric_ratio(nodes_anchor, nodes_a)
+            ratio_b = calculate_asymmetric_ratio(nodes_anchor, nodes_b)
 
             # Normalized Structural Scores
             norm_struct_a = drs_cos_a * ratio_a
