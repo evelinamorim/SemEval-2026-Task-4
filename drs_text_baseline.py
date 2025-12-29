@@ -936,8 +936,8 @@ class HybridEvaluator:
 
     def evaluate_hybrid_simple(self, dataset='test', verbose=False):
         """
-        Simple hybrid: weighted sum of SBERT, DRS Structure, and Temporal Semantics.
-        Uses a 60/20/20 split to balance global, structural, and semantic signals.
+        Simple hybrid: Weighted sum with Length Normalization for DRS Structure.
+        Normalizes structural similarity by the size ratio of the compared graphs.
         """
         if dataset == 'train':
             data_source = self.train_data
@@ -951,7 +951,7 @@ class HybridEvaluator:
             return None
 
         print("\n" + "=" * 60)
-        print(f"EVALUATING: HYBRID (Weighted Semantic) on {data_name} SET")
+        print(f"EVALUATING: HYBRID (Strategy A: Length Norm) on {data_name} SET")
         print("=" * 60)
 
         results = []
@@ -960,76 +960,73 @@ class HybridEvaluator:
             hybrid_feat = self.extract_hybrid_features(idx, dataset)
             if hybrid_feat is None: continue
 
-            sims_a = hybrid_feat['drs_features']['sims_a']
-            sims_b = hybrid_feat['drs_features']['sims_b']
+            # --- EXTRACT DATA ---
+            drs_feats = hybrid_feat['drs_features']
+            text_feats = hybrid_feat['text_features']
 
-            # 1. TEXT COMPONENT (Global Context)
-            # This is your SBERT score (Baseline: 0.615)
-            text_a = hybrid_feat['text_features']['sim_a']
-            text_b = hybrid_feat['text_features']['sim_b']
+            # 1. TEXT COMPONENT
+            text_a, text_b = text_feats['sim_a'], text_feats['sim_b']
 
-            # 2. DRS STRUCTURAL COMPONENT (Literal Match)
-            # This is the graph-based cosine that helped get you to 0.640
-            drs_cos_a = sims_a.get('cosine', 0.0)
-            drs_cos_b = sims_b.get('cosine', 0.0)
+            # 2. DRS STRUCTURAL COMPONENT + NORMALIZATION
+            drs_cos_a = drs_feats.get('sims_a', {}).get('cosine', 0.0)
+            drs_cos_b = drs_feats.get('sims_b', {}).get('cosine', 0.0)
 
-            # 3. DRS TEMPORAL SEMANTIC COMPONENT (Fuzzy Event Match)
-            # This uses BERT to compare event transitions, bridging the "synonym gap"
-            drs_temp_a = sims_a.get('temporal_relation_semantic', 0.0)
-            drs_temp_b = sims_b.get('temporal_relation_semantic', 0.0)
+            # Get node counts (adjust keys if your extractor uses different names)
+            # We assume your extractor now provides the count of nodes/events
+            nodes_anchor = drs_feats.get('nodes_anchor_count', 1)
+            nodes_a = drs_feats.get('nodes_a_count', 1)
+            nodes_b = drs_feats.get('nodes_b_count', 1)
 
-            # 4. WEIGHTING STRATEGY
-            # w_text:   0.60 (Keep the strong global signal)
-            # w_struct: 0.20 (Structural verification)
-            # w_temp:   0.20 (Semantic event verification)
-            # Logic:    0.00 (Currently too sparse/noisy)
+            # Calculate Length Ratio (0.0 to 1.0)
+            # If Anchor has 10 nodes and Story A has 10, ratio is 1.0.
+            # If Anchor has 10 and Story B has 50, ratio is 0.2.
+            ratio_a = min(nodes_anchor, nodes_a) / max(nodes_anchor, nodes_a)
+            ratio_b = min(nodes_anchor, nodes_b) / max(nodes_anchor, nodes_b)
 
+            # Normalized Structural Scores
+            norm_struct_a = drs_cos_a * ratio_a
+            norm_struct_b = drs_cos_b * ratio_b
+
+            # 3. TEMPORAL COMPONENT
+            temp_a = drs_feats.get('sims_a', {}).get('temporal_relation_semantic', 0.5)
+            temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
+
+            # 4. FINAL WEIGHTED SCORE (60/20/20)
             w_text, w_struct, w_temp = 0.60, 0.20, 0.20
 
-            score_a = (w_text * text_a) + (w_struct * drs_cos_a) + (w_temp * drs_temp_a)
-            score_b = (w_text * text_b) + (w_struct * drs_cos_b) + (w_temp * drs_temp_b)
+            score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
+            score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
 
+            # --- EVALUATION ---
             predicted_a_is_closer = score_a > score_b
             ground_truth = item['text_a_is_closer']
             correct = predicted_a_is_closer == ground_truth
 
             results.append({
-                'idx': idx,
-                'predicted': predicted_a_is_closer,
-                'ground_truth': ground_truth,
-                'correct': correct
+                'idx': idx, 'predicted': predicted_a_is_closer,
+                'ground_truth': ground_truth, 'correct': correct
             })
 
             if verbose and not correct:
                 print(f"\n{'!' * 20} FAILURE AT INDEX {idx} {'!' * 20}")
-                print(f"ANCHOR: {item['anchor']}")
-                print(f"STORY A: {item['text_a']}")
-                print(f"STORY B: {item['text_b']}")
+                # Dynamic key detection for printing
+                anchor_txt = item.get('anchor_text') or item.get('anchor') or "N/A"
+                print(f"ANCHOR: {anchor_txt}")
+                print(f"STORY A: {item.get('text_a', 'N/A')}")
+                print(f"STORY B: {item.get('text_b', 'N/A')}")
                 print("-" * 50)
-                print(f"GROUND TRUTH: {'Story A' if ground_truth else 'Story B'} is closer")
-                print(f"PREDICTED:    {'Story A' if predicted_a_is_closer else 'Story B'} is closer")
                 print(
-                    f"METRICS A: Text:{text_a:.2f}, Struct:{drs_cos_a:.2f}, Temp:{drs_temp_a:.2f} -> Score: {score_a:.3f}")
+                    f"RATIOS:  A: {ratio_a:.2f} ({nodes_a}/{nodes_anchor} nodes) | B: {ratio_b:.2f} ({nodes_b}/{nodes_anchor} nodes)")
                 print(
-                    f"METRICS B: Text:{text_b:.2f}, Struct:{drs_cos_b:.2f}, Temp:{drs_temp_b:.2f} -> Score: {score_b:.3f}")
-
-                # Check for "The Bully Feature"
-                if drs_cos_a > 0.90 and text_a < 0.50:
-                    print("DIAGNOSTIC: Story A has SUSPICIOUSLY high structural similarity.")
-                if drs_temp_a == 0.0 and drs_temp_b == 0.0:
-                    print("DIAGNOSTIC: Temporal signal is missing (Sparsity Trap).")
+                    f"METRICS A: Text:{text_a:.2f}, Struct(Norm):{norm_struct_a:.2f}, Temp:{temp_a:.2f} -> Total: {score_a:.3f}")
+                print(
+                    f"METRICS B: Text:{text_b:.2f}, Struct(Norm):{norm_struct_b:.2f}, Temp:{temp_b:.2f} -> Total: {score_b:.3f}")
+                print(f"RESULT:  Ground Truth says {'B' if not ground_truth else 'A'} is closer.")
                 print('!' * 50)
 
         accuracy = sum(r['correct'] for r in results) / len(results)
-
         print(f"\nAccuracy: {accuracy:.3f} ({sum(r['correct'] for r in results)}/{len(results)})")
-        return {
-            'method': 'hybrid_simple_weighted',
-            'accuracy': accuracy,
-            'results': results,
-            'dataset': dataset
-        }
-        
+        return {'accuracy': accuracy, 'results': results}
 
     def evaluate_hybrid_ml(self, classifier='logistic', cv_folds=5, verbose=False):
         """
@@ -1217,8 +1214,8 @@ if __name__ == "__main__":
 
         # Evaluate baselines on test set
         #text_result = evaluator.evaluate_text_only(dataset='test')
-        drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
-        drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
+        #drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
+        #drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
         hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=True)
 
         #print("\n" + "=" * 70)
