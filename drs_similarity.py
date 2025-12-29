@@ -483,6 +483,7 @@ class DRSSimilarity:
                 'logic_sim': self.logic_predicate_similarity(),
                 'role_overlap': role_sim,
                 'logic_overlap': logic_sim,
+                'aggregate': self.aggregate_similarity()
             }
         except Exception as e:
             print(f"ERROR in similarity computation: {e}")

@@ -970,8 +970,8 @@ class HybridEvaluator:
             text_a, text_b = text_feats['sim_a'], text_feats['sim_b']
 
             # 2. DRS STRUCTURAL COMPONENT + NORMALIZATION
-            drs_cos_a = drs_feats.get('sims_a', {}).get('cosine', 0.0)
-            drs_cos_b = drs_feats.get('sims_b', {}).get('cosine', 0.0)
+            drs_cos_a = drs_feats.get('sims_a', {}).get('aggregate', 0.0)
+            drs_cos_b = drs_feats.get('sims_b', {}).get('aggregate', 0.0)
 
             # Get node counts (adjust keys if your extractor uses different names)
             # We assume your extractor now provides the count of nodes/events
