@@ -85,16 +85,18 @@ def _get_bert_embeddings_batch(texts):
 class DRSSimilarity:
     """Compute similarity between two DRS representations."""
 
-    def __init__(self, drs1_features, drs2_features):
+    def __init__(self, drs1, drs2):
         """
         Initialize with feature dictionaries from two DRS files.
 
         Args:
-            drs1_features: dict from parser.get_feature_vector()
-            drs2_features: dict from parser.get_feature_vector()
+            drs1: drs parser object
+            drs2: drs parser object
         """
-        self.feat1 = drs1_features
-        self.feat2 = drs2_features
+        self.drs1 = drs1  # DRSParser object
+        self.drs2 = drs2  # DRSParser object
+        self.feat1 = drs1.get_feature_vector()
+        self.feat2 = drs2.get_feature_vector()
 
     def cosine_similarity(self, keys=None):
         """
@@ -159,7 +161,7 @@ class DRSSimilarity:
             float: Similarity score [0, 1] (1 = identical distribution)
         """
         # Get event type counts
-        types = ['state_count', 'process_count', 'transition_count']
+        types = ['state_ratio', 'process_ratio', 'transition_ratio']
 
         counts1 = np.array([self.feat1.get(t, 0) for t in types], dtype=float)
         counts2 = np.array([self.feat2.get(t, 0) for t in types], dtype=float)
@@ -187,7 +189,7 @@ class DRSSimilarity:
         # Convert to similarity: 1 - sqrt(JS divergence)
         return 1 - np.sqrt(js_div)
 
-    def _extract_temporal_relation_tuples(self, features):
+    def _extract_temporal_relation_tuples(self, drs):
         """
         Extract temporal relations with actual event words.
 
@@ -195,10 +197,10 @@ class DRSSimilarity:
             list: [(relation_type, event1_word, event2_word), ...]
         """
         # Get events and temporal relations
-        events = features.get('events', [])
-        temp_relations = features.get('temporal_relations_raw', [])
+        events = drs.events  # Direct access!
+        temp_rels = drs.temporal_relations  # Direct access!
 
-        if not events or not temp_relations:
+        if not events or not temp_rels:
             return []
 
         # Build mapping from event variable to event word
@@ -211,7 +213,7 @@ class DRSSimilarity:
 
         # Extract ALL relation tuples (not just first few)
         tuples = []
-        for rel in temp_relations:
+        for rel in temp_rels:
             rel_type = rel.get('type', '')
             source = rel.get('source', '')
             target = rel.get('target', '')
@@ -238,8 +240,18 @@ class DRSSimilarity:
                 if rel in members: return group
             return rel
 
-        rels1 = self._extract_temporal_relation_tuples(self.feat1)
-        rels2 = self._extract_temporal_relation_tuples(self.feat2)
+        rels1 = self._extract_temporal_relation_tuples(self.drs1)
+        rels2 = self._extract_temporal_relation_tuples(self.drs2)
+
+        #print(f"DEBUG Temporal: rels1={len(rels1)}, rels2={len(rels2)}")
+        #if rels1:
+        #    print(f"  Sample rels1: {rels1[:3]}")
+        #if rels2:
+        #    print(f"  Sample rels2: {rels2[:3]}")
+
+        #if not rels1 and not rels2:
+        #    print("  → Both empty, returning 1.0")
+        #    return 1.0
 
         # 2. Handling Sparsity (The "Neutral" Fix)
         # If BOTH lack structure, they are 'similar' in their simplicity.
@@ -318,7 +330,7 @@ class DRSSimilarity:
         Returns:
             float: Similarity [0, 1]
         """
-        tense_keys = ['past_count', 'present_count', 'future_count']
+        tense_keys = ['past_ratio', 'present_ratio', 'future_ratio']
 
         counts1 = np.array([self.feat1.get(k, 0) for k in tense_keys], dtype=float)
         counts2 = np.array([self.feat2.get(k, 0) for k in tense_keys], dtype=float)
@@ -412,6 +424,7 @@ class DRSSimilarity:
         trigrams1 = self.feat1.get('event_trigrams', [])
         trigrams2 = self.feat2.get('event_trigrams', [])
 
+
         set1 = set(trigrams1) if trigrams1 else set()
         set2 = set(trigrams2) if trigrams2 else set()
 
@@ -437,6 +450,46 @@ class DRSSimilarity:
 
         return min(c1, c2) / max(c1, c2) if max(c1, c2) > 0 else 0.0
 
+    def logic_predicate_distribution_similarity(self):
+        """
+        Compare VerbNet predicate distributions with IDF weighting.
+        Rare predicates get higher weight.
+        """
+        dist1 = self.drs1.get_logic_enriched_distribution()
+        dist2 = self.drs2.get_logic_enriched_distribution()
+    
+        if not dist1 or not dist2:
+            return 0.0
+    
+        all_preds = set(dist1.keys()) | set(dist2.keys())
+    
+        # Build vectors with IDF weighting
+        vec1, vec2 = [], []
+        for p in sorted(all_preds):
+            c1, c2 = dist1.get(p, 0), dist2.get(p, 0)
+            # IDF-like: rare predicates get higher weight
+            idf = 1.0 / (1 + c1 + c2)
+            vec1.append(c1 * idf)
+            vec2.append(c2 * idf)
+    
+        # Convert to numpy arrays
+        vec1 = np.array(vec1, dtype=float)
+        vec2 = np.array(vec2, dtype=float)
+    
+        # Normalize to distributions
+        if vec1.sum() > 0:
+            vec1 = vec1 / vec1.sum()
+        if vec2.sum() > 0:
+            vec2 = vec2 / vec2.sum()
+    
+        # Cosine similarity
+        norm1, norm2 = np.linalg.norm(vec1), np.linalg.norm(vec2)
+    
+        if norm1 == 0 or norm2 == 0:
+             return 0.0
+    
+        return np.dot(vec1, vec2) / (norm1 * norm2)
+
     def _compute_jaccard_similarity(self, list1, list2):
         """Computes Jaccard similarity between two lists of tokens/labels."""
         set1 = set(list1) if list1 else set()
@@ -448,8 +501,8 @@ class DRSSimilarity:
             return 0.0
 
         intersection = len(set1.intersection(set2))
-        union = len(set1.union(set2))
-        return intersection / union
+        #union = len(set1.union(set2))
+        return intersection / min(len(set1), len(set2))
 
     def compute_all_similarities(self):
         """
@@ -465,24 +518,25 @@ class DRSSimilarity:
             )
 
             logic_sim = self._compute_jaccard_similarity(
-                self.feat1.get('logic_keys', []),
-                self.feat2.get('logic_keys', [])
+                self.feat1.get('logic_predicates', []),
+                self.feat2.get('logic_predicates', [])
             )
             return {
                 'cosine': self.cosine_similarity(),
                 'euclidean': self.euclidean_distance(),
                 'event_type': self.event_type_similarity(),
-                'temporal_relation': self.temporal_relation_similarity(),
+                'temporal_relation': self.temporal_relation_similarity(), # nada!
                 'temporal_density': self.temporal_density_similarity(),
                 'tense': self.tense_similarity(),
                 'event_count_ratio': self.event_count_ratio(),
                 'event_sequence': self.event_sequence_similarity(),
                 'event_trigram': self.event_trigram_similarity(),
-                'temporal_relation_semantic': self.temporal_relation_semantic_similarity(),
-                #'verbnet_distribution':self.verbnet_distribution_similarity(),
-                'logic_sim': self.logic_predicate_similarity(),
-                'role_overlap': role_sim,
-                'logic_overlap': logic_sim
+                'temporal_relation_semantic': self.temporal_relation_semantic_similarity(), # not improved
+                'verbnet_distribution':self.verbnet_distribution_similarity(), # nada
+                'logic_sim': self.logic_predicate_similarity(), #not improved
+                #'role_overlap': role_sim, # worsened
+                'logic_overlap': logic_sim, # improved results
+                #'logic_semantic': self.logic_predicate_distribution_similarity()
             }
         except Exception as e:
             print(f"ERROR in similarity computation: {e}")
@@ -521,30 +575,31 @@ class DRSSimilarity:
     def aggregate_similarity(self, weights=None):
         """
         Weighted combination of all similarities.
-
-        Args:
-            weights: dict of weights for each metric. If None, use equal weights.
-
-        Returns:
-            float: Aggregated similarity score
+        Only includes metrics specified in weights.
         """
         sims = self.compute_all_similarities()
 
         if weights is None:
-            # Default equal weights
+            # Default equal weights for ALL metrics
             weights = {k: 1.0 for k in sims.keys()}
 
         # Normalize euclidean distance to [0, 1] similarity
         if 'euclidean' in sims:
-            # Convert distance to similarity (assuming max distance is ~5)
             sims['euclidean'] = 1 / (1 + sims['euclidean'])
 
-        # Weighted average
-        total_weight = sum(weights.get(k, 0) for k in sims.keys())
+        # FIXED: Only process metrics that are in weights
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for metric_name in weights.keys():
+            if metric_name in sims:  # Only if metric exists
+                weight = weights[metric_name]
+                weighted_sum += sims[metric_name] * weight
+                total_weight += weight
+
         if total_weight == 0:
             return 0.0
 
-        weighted_sum = sum(sims[k] * weights.get(k, 1.0) for k in sims.keys())
         return weighted_sum / total_weight
 
 
@@ -607,8 +662,8 @@ class TripletEvaluator:
         b_feat = b_parser.get_feature_vector()
 
         # Compute similarities
-        sim_anchor_a = DRSSimilarity(anchor_feat, a_feat)
-        sim_anchor_b = DRSSimilarity(anchor_feat, b_feat)
+        sim_anchor_a = DRSSimilarity(anchor_parser, a_parser)
+        sim_anchor_b = DRSSimilarity(anchor_parser, b_parser)
 
         # Get similarity scores
         if similarity_method == 'aggregate':
@@ -744,8 +799,8 @@ def compute_triplet_similarity(anchor_path, a_path, b_path, method='aggregate'):
     b_feat = b_parser.get_feature_vector()
 
     # Compute similarities
-    sim_a = DRSSimilarity(anchor_feat, a_feat)
-    sim_b = DRSSimilarity(anchor_feat, b_feat)
+    sim_a = DRSSimilarity(anchor_parser, a_parser)
+    sim_b = DRSSimilarity(anchor_parser, b_parser)
 
     if method == 'aggregate':
         score_a = sim_a.aggregate_similarity()

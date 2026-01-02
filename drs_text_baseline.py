@@ -242,13 +242,28 @@ class HybridEvaluator:
             nodes_b = max(1, nodes_b)
 
             # Compute DRS similarities
-            sim_anchor_a = DRSSimilarity(anchor_feat, a_feat)
-            sim_anchor_b = DRSSimilarity(anchor_feat, b_feat)
+            sim_anchor_a = DRSSimilarity(anchor_parser, a_parser)
+            sim_anchor_b = DRSSimilarity(anchor_parser  , b_parser)
 
             # Get all similarity metrics
+            # for the aggregate similarity
+            #weights_minimal = {
+            #        'logic_overlap': 2.0,
+            #    'event_sequence': 1.0,
+            #    'temporal_relation_semantic': 1.0}
+            
+            # weights minimal: 0.630 
+            # weights_v1: 0.610
+            # weights v2: 0.620
+            weights = {
+                'logic_overlap': 2.0,
+                'event_sequence': 1.0,
+                'temporal_relation_semantic': 1.0,
+                #'logic_semantic': 1.0
+            }
             try:
                 drs_sims_a = sim_anchor_a.compute_all_similarities()
-                drs_sims_a['aggregate'] = sim_anchor_a.aggregate_similarity()
+                drs_sims_a['aggregate'] = sim_anchor_a.aggregate_similarity(weights=weights)
             except Exception as e:
                 print(f"\n!!! ERROR in DRSSimilarity for anchor-A at idx {idx}:")
                 print(f"    {type(e).__name__}: {e}")
@@ -258,7 +273,7 @@ class HybridEvaluator:
 
             try:
                 drs_sims_b = sim_anchor_b.compute_all_similarities()
-                drs_sims_b['aggregate'] = sim_anchor_b.aggregate_similarity()
+                drs_sims_b['aggregate'] = sim_anchor_b.aggregate_similarity(weights=weights)
             except Exception as e:
                 print(f"\n!!! ERROR in DRSSimilarity for anchor-B at idx {idx}:")
                 print(f"    {type(e).__name__}: {e}")
@@ -832,13 +847,10 @@ class HybridEvaluator:
         """
         # Weights for different metrics (adjust based on importance)
         weights = {
-            'cosine': 0.3,
-            'event_type': 0.2,
-            'temporal_relation': 0.15,
-            'temporal_density': 0.1,
-            'tense': 0.1,
-            'event_count_ratio': 0.15
-            #'verbnet_distribution':0.15
+            'logic_overlap': 2.0,
+            'event_sequence': 1.0,
+            'temporal_relation_semantic': 1.0,
+            #'logic_semantic': 1.0
         }
 
         aggregate = 0.0
@@ -982,10 +994,17 @@ class HybridEvaluator:
             nodes_b = drs_feats.get('nodes_b_count', 1)
 
             def calculate_asymmetric_ratio(anchor_n, story_n):
+                # If story is empty, return 0
+                if story_n == 0 or anchor_n == 0: return 0.0
+
                 if story_n >= anchor_n:
-                    return np.power(anchor_n / story_n, 0.2)
+                    # Coverage: How much larger is the story?
+                    # We use a log-dampening to ensure large stories aren't
+                    # crushed, but also don't explode.
+                    return 1.0 / (1.0 + np.log10(story_n / anchor_n))
                 else:
-                    # Standard penalty for "missing" information
+                    # Standard penalty: if the story is smaller than the anchor,
+                    # it physically cannot contain all the information.
                     return story_n / anchor_n
 
             ratio_a = calculate_asymmetric_ratio(nodes_anchor, nodes_a)
@@ -1000,7 +1019,7 @@ class HybridEvaluator:
             temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
 
             # 4. FINAL WEIGHTED SCORE
-            w_text, w_struct, w_temp = 0.60, 0.40, 0
+            w_text, w_struct, w_temp = 0.70, 0.30, 0
 
             score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
             score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
@@ -1221,50 +1240,50 @@ if __name__ == "__main__":
         print("=" * 70)
 
         # Evaluate baselines on test set
-        #text_result = evaluator.evaluate_text_only(dataset='test')
-        #drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
-        #drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
-        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=True)
+        text_result = evaluator.evaluate_text_only(dataset='test')
+        drs_cosine = evaluator.evaluate_drs_only('cosine', dataset='test')
+        drs_aggregate = evaluator.evaluate_drs_only('aggregate', dataset='test')
+        hybrid_simple = evaluator.evaluate_hybrid_simple(dataset='test', verbose=False)
 
-        #print("\n" + "=" * 70)
-        #print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
-        #print("=" * 70)
+        print("\n" + "=" * 70)
+        print("STEP 2: TRAIN HYBRID MODEL ON SYNTHETIC DATA")
+        print("=" * 70)
 
         # Train on synthetic data
-        #train_stats = evaluator.train_hybrid_model(classifier='xgboost')
+        train_stats = evaluator.train_hybrid_model(classifier='xgboost')
 
-        #print("\n" + "=" * 70)
-        #print("STEP 3: TEST HYBRID MODEL ON DEV SET")
-        #print("=" * 70)
+        print("\n" + "=" * 70)
+        print("STEP 3: TEST HYBRID MODEL ON DEV SET")
+        print("=" * 70)
 
         # Test on dev set
-        #test_result = evaluator.test_hybrid_model(verbose=True)
+        test_result = evaluator.test_hybrid_model(verbose=True)
         # Error analysis
         #error_stats = evaluator.analyze_errors(test_result, verbose=True)
         # Feature importance analysis
-        #importance_stats = evaluator.analyze_feature_importance(plot=True)
+        importance_stats = evaluator.analyze_feature_importance(plot=True)
 
         # Final summary
-        #print("\n" + "=" * 70)
-        #print("FINAL COMPARISON")
-        #print("=" * 70)
+        print("\n" + "=" * 70)
+        print("FINAL COMPARISON")
+        print("=" * 70)
 
-        #results_summary = []
-        #if text_result:
-        #    results_summary.append(('Text-only (SBERT)', text_result['accuracy']))
-        #if drs_cosine:
-        #    results_summary.append(('DRS-only (cosine)', drs_cosine['accuracy']))
-        #if drs_aggregate:
-        #    results_summary.append(('DRS-only (aggregate)', drs_aggregate['accuracy']))
-        #if hybrid_simple:
-        #    results_summary.append(('Hybrid (simple avg)', hybrid_simple['accuracy']))
-        #if test_result:
-        #    results_summary.append(('Hybrid (trained RF)', test_result['accuracy']))
+        results_summary = []
+        if text_result:
+            results_summary.append(('Text-only (SBERT)', text_result['accuracy']))
+        if drs_cosine:
+            results_summary.append(('DRS-only (cosine)', drs_cosine['accuracy']))
+        if drs_aggregate:
+            results_summary.append(('DRS-only (aggregate)', drs_aggregate['accuracy']))
+        if hybrid_simple:
+            results_summary.append(('Hybrid (simple avg)', hybrid_simple['accuracy']))
+        if test_result:
+            results_summary.append(('Hybrid (trained RF)', test_result['accuracy']))
 
-        #results_summary.sort(key=lambda x: x[1], reverse=True)
+        results_summary.sort(key=lambda x: x[1], reverse=True)
 
-        #for i, (name, acc) in enumerate(results_summary, 1):
-        #    print(f"{i}. {name:25s}: {acc:.3f}")
+        for i, (name, acc) in enumerate(results_summary, 1):
+            print(f"{i}. {name:25s}: {acc:.3f}")
 
     else:
         print("\nUsage:")

@@ -272,10 +272,7 @@ class DRSParser:
             # Look for event header: # T40 (word) -> variable
             if line.startswith('#') and '->' in line:
                 # Look ahead for FOL/DRS lines until the next # or end
-                context = []
-                for j in range(i + 1, min(i + 5, len(lines))):
-                    if lines[j].strip().startswith('#'): break
-                    context.append(lines[j])
+                context = lines[i+1 : i+3]
 
                 event = self._parse_event_entry(line, context)
                 if event:
@@ -301,6 +298,7 @@ class DRSParser:
             header_line: # T40 (follows) -> a
             context_lines: Following lines with FOL and DRS
         """
+
         # Parse header: # T40 (follows) -> a
         header_match = re.match(r'#\s+(T\d+)\s+\((.+?)\)\s+->\s+(\w+)', header_line)
         if not header_match:
@@ -313,6 +311,7 @@ class DRSParser:
         temp_relations = []
 
         for line in context_lines:
+
             if 'FOL:' in line or 'DRS:' in line:
                 # Extract attributes like Type(a,State), Tense(a,Past), etc.
                 attributes.update(self._extract_attributes(line))
@@ -604,10 +603,10 @@ class DRSParser:
         # Base denominator for normalization
         num_events = max(self.get_event_count(), 1)
 
+
         return {
             # Core Density (Keep these as they are high-level structural signals)
             'event_count': self.get_event_count(),
-            'temporal_density': self.get_temporal_density(),
             'relation_density': self.get_relation_count() / num_events,
 
             # Normalizing Participants
@@ -645,7 +644,8 @@ class DRSParser:
             # participant tracking
             'participant_roles': self.get_participant_role_links(),
             'unique_actors': list(set(self.get_participant_role_links())),
-            'logic_predicates': list(self.get_logic_enriched_distribution().keys())
+            'logic_predicates': list(self.get_logic_enriched_distribution().keys()),
+            'temporal_density': self.get_temporal_density()
         }
 
     def get_event_bigrams(self):
