@@ -752,6 +752,7 @@ class FiveComponentModel(nn.Module):
             nn.Dropout(config.dropout),
             nn.Linear(config.hidden_dim, config.output_dim),
         )
+        self.temperature = nn.Parameter(torch.tensor(0.1))
 
         print(f"\n✓ FiveComponentModel initialized")
         print(f"  Component 1 (Temporal):    {'✓' if config.use_temporal else '✗'} -> {config.temporal_dim}d")
@@ -854,7 +855,7 @@ class FiveComponentModel(nn.Module):
         sim_a = F.cosine_similarity(anchor_emb.unsqueeze(0), a_emb.unsqueeze(0))
         sim_b = F.cosine_similarity(anchor_emb.unsqueeze(0), b_emb.unsqueeze(0))
 
-        logits = sim_a - sim_b
+        logits = (sim_a - sim_b) / self.temperature
 
         return {
             'anchor_emb': anchor_emb,
