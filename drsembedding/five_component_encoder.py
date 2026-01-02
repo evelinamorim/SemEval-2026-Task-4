@@ -365,7 +365,7 @@ class ParticipantGraphEncoder(nn.Module):
         super().__init__()
 
         self.text_reduction_dim = 64
-        self.text_projection = nn.Linear(384, self.text_reduction_dim)
+        self.text_projection = nn.Linear(config.text_dim, self.text_reduction_dim)
 
         self.config = config
 
@@ -752,7 +752,6 @@ class FiveComponentModel(nn.Module):
             nn.Dropout(config.dropout),
             nn.Linear(config.hidden_dim, config.output_dim),
         )
-        self.register_buffer('temperature', torch.tensor(0.5))
 
         print(f"\n✓ FiveComponentModel initialized")
         print(f"  Component 1 (Temporal):    {'✓' if config.use_temporal else '✗'} -> {config.temporal_dim}d")
@@ -856,7 +855,7 @@ class FiveComponentModel(nn.Module):
         sim_b = F.cosine_similarity(anchor_emb.unsqueeze(0), b_emb.unsqueeze(0))
 
         temperature = self.temperature
-        logits = (sim_a - sim_b) / temperature
+        logits = (sim_a - sim_b)
 
         return {
             'anchor_emb': anchor_emb,
