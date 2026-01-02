@@ -364,7 +364,7 @@ class ParticipantGraphEncoder(nn.Module):
     def __init__(self, config: FiveComponentConfig):
         super().__init__()
 
-        self.text_reduction_dim = 16 
+        self.text_reduction_dim = 64
         self.text_projection = nn.Linear(384, self.text_reduction_dim)
 
         self.config = config
