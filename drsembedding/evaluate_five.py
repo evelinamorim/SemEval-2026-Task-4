@@ -221,7 +221,8 @@ def load_model_and_processor(
     # Load training data for vocabulary
     print(f"Loading vocabulary from: {train_data_path}")
     train_dataset = DRSDataset(train_data_path)
-    processor = StoryDataProcessor(train_dataset)
+    text_model_name = config_dict.get('text_model_name', 'all-MiniLM-L6-v2')
+    processor = StoryDataProcessor(train_dataset, text_model_name=text_model_name)
 
     # Create config
     config = FiveComponentConfig(

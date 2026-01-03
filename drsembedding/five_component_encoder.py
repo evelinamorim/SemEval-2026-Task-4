@@ -725,6 +725,14 @@ class FiveComponentModel(nn.Module):
         else:
             self.logical_encoder = None
 
+        if config.use_text and HAS_SENTENCE_TRANSFORMERS:
+            self.text_encoder = TextEncoder(config, device)
+        else:
+            self.text_encoder = None
+            if config.use_text:
+                print("Warning: Text encoder disabled (sentence-transformers not available)")
+                config.use_text = False
+
         if config.use_participant:
             self.participant_encoder = ParticipantGraphEncoder(config)
         else:
@@ -735,13 +743,7 @@ class FiveComponentModel(nn.Module):
         else:
             self.semantic_encoder = None
 
-        if config.use_text and HAS_SENTENCE_TRANSFORMERS:
-            self.text_encoder = TextEncoder(config, device)
-        else:
-            self.text_encoder = None
-            if config.use_text:
-                print("Warning: Text encoder disabled (sentence-transformers not available)")
-                config.use_text = False
+
 
         # Fusion layer
         total_dim = config.total_component_dim()
@@ -854,7 +856,7 @@ class FiveComponentModel(nn.Module):
         sim_a = F.cosine_similarity(anchor_emb.unsqueeze(0), a_emb.unsqueeze(0))
         sim_b = F.cosine_similarity(anchor_emb.unsqueeze(0), b_emb.unsqueeze(0))
 
-        temperature = self.temperature
+        #temperature = self.temperature
         logits = (sim_a - sim_b)
 
         return {
