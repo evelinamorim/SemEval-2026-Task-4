@@ -24,6 +24,8 @@ from typing import Dict, List, Tuple, Optional, Union
 from dataclasses import dataclass
 import warnings
 
+
+
 # Try to import sentence-transformers
 try:
     from sentence_transformers import SentenceTransformer
@@ -654,8 +656,6 @@ class TextEncoder(nn.Module):
             print(f"Updating config.text_dim to {self.text_dim}")
             config.text_dim = self.text_dim
 
-        # Optional projection layer
-        self.projection = None
 
         # Freeze the sentence transformer by default
         for param in self.model.parameters():
@@ -671,12 +671,20 @@ class TextEncoder(nn.Module):
         Returns:
             Text embedding [text_dim]
         """
+        was_training = self.model.training
+        self.model.eval()
+
         # Get embedding from sentence-transformer
         with torch.no_grad():
             embedding = self.model.encode(text, convert_to_tensor=True)
 
-        if self.projection is not None:
-            embedding = self.projection(embedding)
+        if was_training:
+            self.model.train()
+
+        # Move to correct device
+        embedding = embedding.to(self.device)
+
+        embedding = embedding.detach().requires_grad_(False)
 
         return embedding
 
@@ -696,6 +704,146 @@ class TextEncoder(nn.Module):
         return embeddings
 
 
+class ComponentAttentionFusion(nn.Module):
+    """
+    Attention mechanism to weigh components dynamically.
+
+    Instead of fixed weights, learns to attend to relevant components
+    based on each story's characteristics.
+    """
+
+    def __init__(self, config: FiveComponentConfig):
+        super().__init__()
+        self.config = config
+        self.device = 'cpu'  # Will be set later
+
+        # We'll collect which components are enabled
+        self.enabled_components = []
+
+        # Query vector (what to look for in components)
+        self.query = nn.Parameter(torch.randn(config.output_dim))
+
+        # Key projections for each component type
+        self.key_projections = nn.ModuleDict()
+        self.value_projections = nn.ModuleDict()
+
+        # Component dimensions mapping
+        component_dims = {
+            'temporal': config.temporal_dim,
+            'logical': config.logical_dim,
+            'participant': config.participant_dim,
+            'semantic': config.semantic_dim,
+            'text': config.text_dim
+        }
+
+        # Only create projections for enabled components
+        if config.use_temporal:
+            self._add_component('temporal', component_dims['temporal'])
+        if config.use_logical:
+            self._add_component('logical', component_dims['logical'])
+        if config.use_participant:
+            self._add_component('participant', component_dims['participant'])
+        if config.use_semantic:
+            self._add_component('semantic', component_dims['semantic'])
+        if config.use_text:
+            self._add_component('text', component_dims['text'])
+
+        # Temperature for softmax
+        self.temperature = nn.Parameter(torch.tensor(1.0))
+
+        self.component_biases = nn.ParameterDict()
+        for name in self.enabled_components:
+            self.component_biases[name] = nn.Parameter(torch.zeros(1))
+
+        print(f"  ComponentAttentionFusion: {len(self.enabled_components)} components")
+        print(f"  Enabled: {self.enabled_components}")
+
+        # Final projection layer (optional)
+        self.output_projection = nn.Sequential(
+            nn.Linear(config.output_dim, config.output_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout)
+        )
+
+        print(f"  ComponentAttentionFusion: {len(self.enabled_components)} components")
+        print(f"  Enabled: {self.enabled_components}")
+
+    def _add_component(self, name: str, input_dim: int):
+        """Helper to add a component's projection layers."""
+        self.enabled_components.append(name)
+
+        # Key projection: maps component to query space
+        self.key_projections[name] = nn.Linear(input_dim, self.config.output_dim)
+
+        # Value projection: maps component to value space
+        self.value_projections[name] = nn.Linear(input_dim, self.config.output_dim)
+
+    def forward(self, component_embeddings: Dict[str, torch.Tensor]):
+        """
+        Args:
+            component_embeddings: Dict mapping component_name -> embedding tensor
+
+        Returns:
+            tuple: (fused_embedding, attention_weights)
+        """
+        if not component_embeddings:
+            # Return zero vector if no components
+            zero_vec = torch.zeros(self.config.output_dim, device=self.device)
+            return zero_vec, torch.tensor([], device=self.device)
+
+        # Store device for later
+        self.device = next(iter(component_embeddings.values())).device
+        self.query = self.query.to(self.device)
+        self.temperature = self.temperature.to(self.device)
+
+        # Project each component to keys and values
+        keys = []
+        values = []
+        valid_components = []
+
+        for comp_name in self.enabled_components:
+            if comp_name in component_embeddings:
+                emb = component_embeddings[comp_name]
+
+                if emb.is_inference():
+                    emb = emb.clone()
+
+                # Now run through the projections
+                key_proj = self.key_projections[comp_name](emb)
+                value_proj = self.value_projections[comp_name](emb)
+
+                keys.append(key_proj)
+                values.append(value_proj)
+                valid_components.append(comp_name)
+
+        if not keys:  # No valid components
+            zero_vec = torch.zeros(self.config.output_dim, device=self.device)
+            return zero_vec, torch.tensor([], device=self.device)
+
+        # Stack: [num_components, output_dim]
+        K = torch.stack(keys, dim=0)  # Keys
+        V = torch.stack(values, dim=0)  # Values
+
+        # Compute attention scores: (query • key) / sqrt(dim)
+        # query shape: [output_dim], K shape: [C, output_dim]
+        scores = torch.matmul(K, self.query) / (self.config.output_dim ** 0.5)
+        if hasattr(self, 'component_biases'):
+            bias_list = torch.stack([self.component_biases[name] for name in valid_components])
+            scores = scores + bias_list.squeeze().to(self.device)
+
+        # Apply temperature scaling
+        scores = scores / self.temperature
+
+        # Softmax over components to get attention weights
+        attention_weights = F.softmax(scores, dim=0)  # [C]
+        weighted_sum = torch.sum(attention_weights.unsqueeze(1) * V, dim=0)
+
+        # Weighted sum of values
+        if hasattr(self, 'output_projection'):
+            weighted_sum = self.output_projection(weighted_sum)
+
+
+        return weighted_sum, attention_weights
 # ============================================================
 # MAIN MODEL: FIVE-COMPONENT FUSION
 # ============================================================
@@ -714,6 +862,8 @@ class FiveComponentModel(nn.Module):
         self.config = config
         self.device = device
 
+        original_text_dim = config.text_dim
+
         # Initialize components
         if config.use_temporal:
             self.temporal_encoder = TemporalGraphEncoder(config)
@@ -725,14 +875,6 @@ class FiveComponentModel(nn.Module):
         else:
             self.logical_encoder = None
 
-        if config.use_text and HAS_SENTENCE_TRANSFORMERS:
-            self.text_encoder = TextEncoder(config, device)
-        else:
-            self.text_encoder = None
-            if config.use_text:
-                print("Warning: Text encoder disabled (sentence-transformers not available)")
-                config.use_text = False
-
         if config.use_participant:
             self.participant_encoder = ParticipantGraphEncoder(config)
         else:
@@ -743,17 +885,26 @@ class FiveComponentModel(nn.Module):
         else:
             self.semantic_encoder = None
 
+        if config.use_text and HAS_SENTENCE_TRANSFORMERS:
+            self.text_encoder = TextEncoder(config, device)
+        else:
+            self.text_encoder = None
 
 
-        # Fusion layer
-        total_dim = config.total_component_dim()
+        # Old: Fusion layer
+        #total_dim = config.total_component_dim()
 
-        self.fusion = nn.Sequential(
-            nn.Linear(total_dim, config.hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(config.dropout),
-            nn.Linear(config.hidden_dim, config.output_dim),
-        )
+        #self.fusion = nn.Sequential(
+        #    nn.Linear(total_dim, config.hidden_dim),
+        #    nn.ReLU(),
+        #    nn.Dropout(config.dropout),
+        #    nn.Linear(config.hidden_dim, config.output_dim),
+        #)
+
+        # new fusion layer
+        self.component_fusion = ComponentAttentionFusion(config)
+
+        config.text_dim = original_text_dim
 
         print(f"\n✓ FiveComponentModel initialized")
         print(f"  Component 1 (Temporal):    {'✓' if config.use_temporal else '✗'} -> {config.temporal_dim}d")
@@ -761,7 +912,7 @@ class FiveComponentModel(nn.Module):
         print(f"  Component 3 (Participant): {'✓' if config.use_participant else '✗'} -> {config.participant_dim}d")
         print(f"  Component 4 (Semantic):    {'✓' if config.use_semantic else '✗'} -> {config.semantic_dim}d")
         print(f"  Component 5 (Text):        {'✓' if config.use_text else '✗'} -> {config.text_dim}d")
-        print(f"  Total input dim: {total_dim}")
+        #print(f"  Total input dim: {total_dim}")
         print(f"  Output dim: {config.output_dim}")
 
     def encode_story(self, story_data: Dict) -> torch.Tensor:
@@ -827,13 +978,32 @@ class FiveComponentModel(nn.Module):
             text_emb = self.text_encoder(story_data['text'])
             components.append(text_emb)
 
-        # Concatenate all components
-        combined = torch.cat(components, dim=-1)
 
-        # Fusion
-        output = self.fusion(combined)
+        component_dict = {}
+        if self.temporal_encoder is not None:
+            component_dict['temporal'] = temporal_emb
+        if self.logical_encoder is not None:
+            component_dict['logical'] = logical_emb
+        if self.participant_encoder is not None:
+            component_dict['participant'] = participant_emb
+        if self.semantic_encoder is not None:
+            component_dict['semantic'] = semantic_emb
+        if self.text_encoder is not None:
+            component_dict['text'] = text_emb
 
-        return output
+        # Use attention fusion instead of concatenation + MLP
+        if hasattr(self, 'component_fusion'):
+            output, attention_weights = self.component_fusion(component_dict)
+            return output, attention_weights
+        else:
+            # Fallback: old concatenation method (for compatibility)
+            combined = torch.cat(components, dim=-1)
+            output = self.fusion(combined)
+            # Create dummy attention weights
+            n_components = len(components)
+            attention_weights = torch.ones(n_components) / n_components
+            return output, attention_weights
+
 
     def forward(
         self,
@@ -848,9 +1018,9 @@ class FiveComponentModel(nn.Module):
             Dict with embeddings and similarities
         """
         # Encode all three stories
-        anchor_emb = self.encode_story(anchor_data)
-        a_emb = self.encode_story(story_a_data)
-        b_emb = self.encode_story(story_b_data)
+        anchor_emb, anchor_attn  = self.encode_story(anchor_data)
+        a_emb, a_attn  = self.encode_story(story_a_data)
+        b_emb, b_attn  = self.encode_story(story_b_data)
 
         # Compute similarities (cosine)
         sim_a = F.cosine_similarity(anchor_emb.unsqueeze(0), a_emb.unsqueeze(0))
@@ -866,8 +1036,10 @@ class FiveComponentModel(nn.Module):
             'sim_a': sim_a,
             'sim_b': sim_b,
             'logits': logits,
+            'anchor_attention': anchor_attn,
+            'a_attention': a_attn,
+            'b_attention': b_attn,
         }
-
 
 # ============================================================
 # DATA PROCESSOR
