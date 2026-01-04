@@ -71,7 +71,7 @@ class FiveComponentConfig:
     num_tenses: int = 4             # Past, Present, Future, Unknown
     num_aspects: int = 3            # Perfective, Progressive, Unknown
     num_vforms: int = 3             # Infinitive, Participle, Unknown
-    num_temporal_relations: int = 5  # occursBefore, occursAfter, overlaps, during
+    num_temporal_relations: int = 4  # occursBefore, occursAfter, overlaps, during
     num_verbnet_classes: int = 3000  # Approximate
     num_predicates: int = 150        # Approximate
 
@@ -1153,7 +1153,6 @@ class StoryDataProcessor:
         temporal_edge_types = torch.zeros(num_events, num_events, dtype=torch.long)
 
         TEMPORAL_RELATIONS = ['occursBefore', 'occursAfter', 'overlaps', 'during']
-        SEQUENTIAL_EDGE_TYPE = len(TEMPORAL_RELATIONS) + 1
 
         for edge in story.temporal_edges:
             src_id = edge['source']
@@ -1168,9 +1167,6 @@ class StoryDataProcessor:
                 rel_idx = TEMPORAL_RELATIONS.index(rel) + 1 if rel in TEMPORAL_RELATIONS else 0
                 temporal_edge_types[src_idx, tgt_idx] = rel_idx
 
-        for i in range(num_events - 1):
-            temporal_adjacency[i, i + 1] = 1.0
-            temporal_edge_types[i, i + 1] = SEQUENTIAL_EDGE_TYPE
 
         # Add self-loops
         for i in range(num_events):

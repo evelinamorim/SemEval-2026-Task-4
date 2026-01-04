@@ -292,32 +292,50 @@ class FiveComponentTrainer:
 
 
 def create_datasets(
-        jsonl_path: str,
+        train_jsonl_path: str,
         processor: StoryDataProcessor,
+        val_jsonl_path: str = None,
         val_split: float = 0.1,
         seed: int = 42,
         device: str = 'cpu',
 ) -> Tuple[FiveTripletDataset, FiveTripletDataset]:
-    """Create train and validation datasets."""
+    """Create train and validation datasets.
 
-    drs_dataset = DRSDataset(jsonl_path)
+    If val_jsonl_path is provided, use it for validation.
+    Otherwise, split train data using val_split.
+    """
 
-    # Split indices
-    num_samples = len(drs_dataset)
-    indices = list(range(num_samples))
+    train_drs_dataset = DRSDataset(train_jsonl_path)
 
-    np.random.seed(seed)
-    np.random.shuffle(indices)
+    if val_jsonl_path is not None:
+        # Use separate validation file
+        val_drs_dataset = DRSDataset(val_jsonl_path)
 
-    val_size = int(num_samples * val_split)
-    train_indices = indices[val_size:]
-    val_indices = indices[:val_size]
+        train_indices = list(range(len(train_drs_dataset)))
+        val_indices = list(range(len(val_drs_dataset)))
 
-    print(f"\nData split: {len(train_indices)} train, {len(val_indices)} val")
+        print(f"\nData: {len(train_indices)} train, {len(val_indices)} val (from separate file)")
 
-    # Create datasets
-    train_dataset = FiveTripletDataset(drs_dataset, processor, train_indices, device)
-    val_dataset = FiveTripletDataset(drs_dataset, processor, val_indices, device)
+        # Create datasets
+        train_dataset = FiveTripletDataset(train_drs_dataset, processor, train_indices, device)
+        val_dataset = FiveTripletDataset(val_drs_dataset, processor, val_indices, device)
+    else:
+        # Split train data
+        num_samples = len(train_drs_dataset)
+        indices = list(range(num_samples))
+
+        np.random.seed(seed)
+        np.random.shuffle(indices)
+
+        val_size = int(num_samples * val_split)
+        train_indices = indices[val_size:]
+        val_indices = indices[:val_size]
+
+        print(f"\nData split: {len(train_indices)} train, {len(val_indices)} val")
+
+        # Create datasets
+        train_dataset = FiveTripletDataset(train_drs_dataset, processor, train_indices, device)
+        val_dataset = FiveTripletDataset(train_drs_dataset, processor, val_indices, device)
 
     return train_dataset, val_dataset
 
@@ -330,6 +348,7 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
     parser.add_argument('--patience', type=int, default=10, help='Early stopping patience')
     parser.add_argument('--val_split', type=float, default=0.1, help='Validation split')
+    parser.add_argument('--val_data', type=str, default=None, help='Separate validation JSONL (overrides val_split)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     parser.add_argument('--checkpoint_dir', type=str, default='./checkpoints_five', help='Checkpoint dir')
     parser.add_argument('--device', type=str, default='auto', help='Device')
@@ -398,9 +417,11 @@ def main():
     )
 
     # Create datasets
+    # Create datasets
     train_dataset, val_dataset = create_datasets(
         args.data_path,
         processor,
+        val_jsonl_path=args.val_data,
         val_split=args.val_split,
         seed=args.seed,
         device=device,
