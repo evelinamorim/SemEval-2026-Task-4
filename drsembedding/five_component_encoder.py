@@ -808,6 +808,8 @@ class ComponentAttentionFusion(nn.Module):
                 if emb.is_inference():
                     emb = emb.clone()
 
+                emb = F.normalize(emb, dim=-1)
+
                 # Now run through the projections
                 key_proj = self.key_projections[comp_name](emb)
                 value_proj = self.value_projections[comp_name](emb)
@@ -832,7 +834,8 @@ class ComponentAttentionFusion(nn.Module):
             scores = scores + bias_list.squeeze().to(self.device)
 
         # Apply temperature scaling
-        scores = scores / self.temperature
+        temperature = 1.0
+        scores = scores / temperature
 
         # Softmax over components to get attention weights
         attention_weights = F.softmax(scores, dim=0)  # [C]
@@ -891,18 +894,24 @@ class FiveComponentModel(nn.Module):
             self.text_encoder = None
 
 
-        # Old: Fusion layer
-        #total_dim = config.total_component_dim()
-
-        #self.fusion = nn.Sequential(
-        #    nn.Linear(total_dim, config.hidden_dim),
-        #    nn.ReLU(),
-        #    nn.Dropout(config.dropout),
-        #    nn.Linear(config.hidden_dim, config.output_dim),
-        #)
+        self.component_weights = nn.Parameter(torch.tensor([
+            1.0,  # temporal
+            2.0,  # logical (most important!)
+            1.0,  # participant
+            1.0,  # semantic
+            1.0,  # text
+        ]))
 
         # new fusion layer
-        self.component_fusion = ComponentAttentionFusion(config)
+        total_dim = config.total_component_dim()
+        self.fusion = nn.Sequential(
+            nn.Linear(total_dim, config.hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(config.hidden_dim, config.output_dim),
+        )
+
+        print(f"  Total input dim: {total_dim}")
 
         config.text_dim = original_text_dim
 
@@ -978,31 +987,20 @@ class FiveComponentModel(nn.Module):
             text_emb = self.text_encoder(story_data['text'])
             components.append(text_emb)
 
+        # Apply learnable component weights
+        weights = F.softmax(self.component_weights, dim=0)
+        weighted_components = []
+        for i, comp in enumerate(components):
+            # Clone inference tensors (e.g., from frozen SBERT)
+            if comp.is_inference():
+                comp = comp.clone()
+            weighted_components.append(comp * weights[i])
 
-        component_dict = {}
-        if self.temporal_encoder is not None:
-            component_dict['temporal'] = temporal_emb
-        if self.logical_encoder is not None:
-            component_dict['logical'] = logical_emb
-        if self.participant_encoder is not None:
-            component_dict['participant'] = participant_emb
-        if self.semantic_encoder is not None:
-            component_dict['semantic'] = semantic_emb
-        if self.text_encoder is not None:
-            component_dict['text'] = text_emb
+        # Concatenate and fuse
+        combined = torch.cat(weighted_components, dim=-1)
+        output = self.fusion(combined)
 
-        # Use attention fusion instead of concatenation + MLP
-        if hasattr(self, 'component_fusion'):
-            output, attention_weights = self.component_fusion(component_dict)
-            return output, attention_weights
-        else:
-            # Fallback: old concatenation method (for compatibility)
-            combined = torch.cat(components, dim=-1)
-            output = self.fusion(combined)
-            # Create dummy attention weights
-            n_components = len(components)
-            attention_weights = torch.ones(n_components) / n_components
-            return output, attention_weights
+        return output, weights  # Return weights for analysis
 
 
     def forward(
