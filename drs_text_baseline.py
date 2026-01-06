@@ -1055,6 +1055,107 @@ class HybridEvaluator:
         print(f"\nAccuracy: {accuracy:.3f} ({sum(r['correct'] for r in results)}/{len(results)})")
         return {'accuracy': accuracy, 'results': results}
 
+    def generate_submission(self, output_file: str = 'track_a.jsonl', verbose: bool = False):
+        """
+        Generate submission file for Track A using evaluate_hybrid_simple logic.
+
+        For test data WITHOUT labels.
+
+        Args:
+            output_file: Path to output JSONL file
+            verbose: Print progress
+
+        Returns:
+            dict: Statistics about the submission
+        """
+        if self.test_data is None:
+            print("ERROR: No test data loaded!")
+            return None
+
+        print("\n" + "=" * 60)
+        print("GENERATING SUBMISSION FILE")
+        print("=" * 60)
+
+        predictions = []
+        skipped = 0
+
+        for idx, item in enumerate(self.test_data):
+            hybrid_feat = self.extract_hybrid_features(idx, 'test')
+
+            if hybrid_feat is None:
+                # Fallback to text-only if DRS fails
+                text_feat = self.extract_text_features(idx, 'test')
+                if text_feat is not None:
+                    predicted_a_is_closer = text_feat['sim_a'] > text_feat['sim_b']
+                else:
+                    # Random fallback
+                    predicted_a_is_closer = True
+                    skipped += 1
+            else:
+                # Same logic as evaluate_hybrid_simple
+                drs_feats = hybrid_feat['drs_features']
+                text_feats = hybrid_feat['text_features']
+
+                text_a, text_b = text_feats['sim_a'], text_feats['sim_b']
+
+                drs_cos_a = drs_feats.get('sims_a', {}).get('aggregate', 0.0)
+                drs_cos_b = drs_feats.get('sims_b', {}).get('aggregate', 0.0)
+
+                nodes_anchor = drs_feats.get('nodes_anchor_count', 1)
+                nodes_a = drs_feats.get('nodes_a_count', 1)
+                nodes_b = drs_feats.get('nodes_b_count', 1)
+
+                def calculate_asymmetric_ratio(anchor_n, story_n):
+                    if story_n == 0 or anchor_n == 0: return 0.0
+                    if story_n >= anchor_n:
+                        return 1.0 / (1.0 + np.log10(story_n / anchor_n))
+                    else:
+                        return story_n / anchor_n
+
+                ratio_a = calculate_asymmetric_ratio(nodes_anchor, nodes_a)
+                ratio_b = calculate_asymmetric_ratio(nodes_anchor, nodes_b)
+
+                norm_struct_a = drs_cos_a * ratio_a
+                norm_struct_b = drs_cos_b * ratio_b
+
+                temp_a = drs_feats.get('sims_a', {}).get('temporal_relation_semantic', 0.5)
+                temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
+
+                w_text, w_struct, w_temp = 0.70, 0.30, 0
+
+                score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
+                score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
+
+                predicted_a_is_closer = score_a > score_b
+
+            predictions.append({"text_a_is_closer": bool(predicted_a_is_closer)})
+
+            if verbose and (idx + 1) % 50 == 0:
+                print(f"  Processed {idx + 1}/{len(self.test_data)}")
+
+        # Write output file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for pred in predictions:
+                f.write(json.dumps(pred) + '\n')
+
+        # Stats
+        a_count = sum(1 for p in predictions if p['text_a_is_closer'])
+        b_count = len(predictions) - a_count
+
+        print(f"\n✓ Saved {len(predictions)} predictions to {output_file}")
+        print(f"  Predicted A closer: {a_count} ({100 * a_count / len(predictions):.1f}%)")
+        print(f"  Predicted B closer: {b_count} ({100 * b_count / len(predictions):.1f}%)")
+        if skipped > 0:
+            print(f"  Skipped (random fallback): {skipped}")
+
+        return {
+            'total': len(predictions),
+            'a_closer': a_count,
+            'b_closer': b_count,
+            'skipped': skipped,
+            'output_file': output_file
+        }
+
     def evaluate_hybrid_ml(self, classifier='logistic', cv_folds=5, verbose=False):
         """
         ML-based hybrid: train classifier on DRS + Text features (CROSS-VALIDATION MODE).
@@ -1219,6 +1320,22 @@ if __name__ == "__main__":
         # Compare all approaches
         results = evaluator.compare_all_approaches()
 
+    elif len(sys.argv) >= 4 and sys.argv[1] == '--submit':
+        # Submission mode
+        print("\nMode: GENERATE SUBMISSION")
+        test_drs_dir = sys.argv[2]
+        test_jsonl = sys.argv[3]
+        output_file = sys.argv[4] if len(sys.argv) > 4 else 'track_a.jsonl'
+
+        evaluator = HybridEvaluator(
+            text_model='all-mpnet-base-v2',
+            test_drs_dir=test_drs_dir,
+            test_jsonl=test_jsonl
+        )
+
+        evaluator.generate_submission(output_file=output_file, verbose=True)
+
+
     elif len(sys.argv) == 5:
         # Train/test mode
         print("\nMode: TRAIN/TEST (separate datasets)")
@@ -1284,6 +1401,7 @@ if __name__ == "__main__":
 
         for i, (name, acc) in enumerate(results_summary, 1):
             print(f"{i}. {name:25s}: {acc:.3f}")
+
 
     else:
         print("\nUsage:")
