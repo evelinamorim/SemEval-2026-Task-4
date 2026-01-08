@@ -397,6 +397,14 @@ def main():
     drs_dataset = DRSDataset(args.data_path)
     processor = StoryDataProcessor(drs_dataset, text_model_name=args.text_model)
 
+    vocab_path = args.checkpoint_dir / 'vocabularies.json'
+    with open(vocab_path, 'w') as f:
+        json.dump({
+            'verbnet_vocab': processor.verbnet_vocab,
+            'predicate_vocab': processor.predicate_vocab,
+        }, f)
+    print(f"✓ Saved vocabularies to {vocab_path}")
+
     # Create config
     config = FiveComponentConfig(
         temporal_dim=args.temporal_dim,
