@@ -11,9 +11,10 @@ from pathlib import Path
 from tqdm import tqdm
 from five_component_encoder import (
     FiveComponentModel,
-    ModelConfig,
-    load_preprocessed_data,
+    FiveComponentConfig
 )
+from train_five import StoryDataProcessor
+from data_loader import DRSDataset
 
 
 def load_model(checkpoint_path, config_path, device='cpu'):
@@ -22,7 +23,7 @@ def load_model(checkpoint_path, config_path, device='cpu'):
     with open(config_path, 'r') as f:
         config_dict = json.load(f)
 
-    config = ModelConfig(**config_dict)
+    config = FiveComponentConfig(**config_dict)
 
     print(f"Initializing model...")
     model = FiveComponentModel(config, device=device)
@@ -62,13 +63,13 @@ def predict_batch(model, batch_data, device='cpu'):
 
     return text_a_is_closer
 
-
 def generate_submission(
-        model,
-        test_file,
-        output_file,
-        device='cpu',
-        batch_size=8
+    model,
+    test_file,
+    output_file,
+    text_model_name='sentence-transformers/all-MiniLM-L6-v2',
+    device='cpu',
+    batch_size=8
 ):
     """
     Generate submission file from test data.
@@ -90,25 +91,28 @@ def generate_submission(
 
     # Load test data
     print(f"\nLoading test data...")
-    test_data = load_preprocessed_data(test_file)
-    print(f"✓ Loaded {len(test_data)} test instances")
+    drs_dataset = DRSDataset(test_file)
+    processor = StoryDataProcessor(drs_dataset, text_model_name=text_model_name)
+    print(f"✓ Loaded {len(processor.dataset)} test instances")
 
     # Process in batches
     all_predictions = []
-    num_batches = (len(test_data) + batch_size - 1) // batch_size
+    num_batches = (len(processor.dataset) + batch_size - 1) // batch_size
 
     model.eval()
 
     print(f"\nGenerating predictions...")
-    for i in tqdm(range(0, len(test_data), batch_size), total=num_batches):
-        batch = test_data[i:i + batch_size]
+    num_batches = (len(processor.dataset) + batch_size - 1) // batch_size
 
-        # Prepare batch data
-        batch_data = {
-            'anchor': [item['anchor'] for item in batch],
-            'story_a': [item['story_a'] for item in batch],
-            'story_b': [item['story_b'] for item in batch],
-        }
+    for i in tqdm(range(0, len(processor.dataset), batch_size), total=num_batches):
+        batch_indices = list(range(i, min(i + batch_size, len(processor.dataset))))
+
+        # Get batch data using processor
+        batch_data = processor.collate_fn([processor[idx] for idx in batch_indices])
+
+        # Move to device
+        batch_data = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                      for k, v in batch_data.items()}
 
         # Get predictions
         predictions = predict_batch(model, batch_data, device)
@@ -178,6 +182,13 @@ def main():
         help='Batch size for inference (default: 8)'
     )
 
+    parser.add_argument(
+        '--text-model',
+        type=str,
+        default='sentence-transformers/all-MiniLM-L6-v2',
+        help='Text model for sentence embeddings (default: all-MiniLM-L6-v2)'
+    )
+
     args = parser.parse_args()
 
     # Validate inputs
@@ -207,6 +218,7 @@ def main():
         model=model,
         test_file=test_file,
         output_file=args.output,
+        text_model_name=args.text_model,
         device=device,
         batch_size=args.batch_size
     )
