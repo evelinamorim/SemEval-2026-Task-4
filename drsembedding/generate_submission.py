@@ -93,19 +93,19 @@ def generate_submission(
     print(f"\nLoading test data...")
     drs_dataset = DRSDataset(test_file)
     processor = StoryDataProcessor(drs_dataset, text_model_name=text_model_name)
-    print(f"✓ Loaded {len(processor.dataset)} test instances")
+    print(f"✓ Loaded {len(drs_dataset)} test instances")
 
     # Process in batches
     all_predictions = []
-    num_batches = (len(processor.dataset) + batch_size - 1) // batch_size
+    num_batches = (len(drs_dataset) + batch_size - 1) // batch_size
 
     model.eval()
 
     print(f"\nGenerating predictions...")
-    num_batches = (len(processor.dataset) + batch_size - 1) // batch_size
+    num_batches = (len(drs_dataset) + batch_size - 1) // batch_size
 
-    for i in tqdm(range(0, len(processor.dataset), batch_size), total=num_batches):
-        batch_indices = list(range(i, min(i + batch_size, len(processor.dataset))))
+    for i in tqdm(range(0, len(drs_dataset), batch_size), total=num_batches):
+        batch_indices = list(range(i, min(i + batch_size, len(drs_dataset))))
 
         # Get batch data using processor
         batch_data = processor.collate_fn([processor[idx] for idx in batch_indices])
