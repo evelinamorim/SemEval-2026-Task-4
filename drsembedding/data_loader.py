@@ -141,11 +141,16 @@ class DRSDataset:
         # Collect stats
         anchor_events = [t.anchor.num_events for t in self.triplets]
         anchor_temp_edges = [t.anchor.num_temporal_edges for t in self.triplets]
-        labels = [t.label for t in self.triplets]
+        labels = [t.label for t in self.triplets if t.label is not None]
 
         print(f"  Events per story: {sum(anchor_events) / len(anchor_events):.1f} avg")
         print(f"  Temporal edges: {sum(anchor_temp_edges) / len(anchor_temp_edges):.1f} avg")
-        print(f"  Labels: {sum(labels)} A-closer, {len(labels) - sum(labels)} B-closer")
+
+        # Only print label stats if we have labels
+        if labels:
+            print(f"  Labels: {sum(labels)} A-closer, {len(labels) - sum(labels)} B-closer")
+        else:
+            print(f"  Labels: None (test set)")
 
     def __len__(self) -> int:
         return len(self.triplets)
