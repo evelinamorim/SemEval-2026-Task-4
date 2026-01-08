@@ -35,11 +35,7 @@ except ImportError:
     warnings.warn("sentence-transformers not installed. Component 5 will be disabled.")
 
 # Import our modules
-try:
-    from data_loader import DRSDataset, StoryGraph, Triplet
-    from graph_encoder import GraphStructureEncoder, TemporalGraph
-except ImportError:
-    pass
+from data_loader import DRSDataset, StoryGraph, Triplet
 
 
 # ============================================================
