@@ -397,7 +397,7 @@ def main():
     drs_dataset = DRSDataset(args.data_path)
     processor = StoryDataProcessor(drs_dataset, text_model_name=args.text_model)
 
-    vocab_path = args.checkpoint_dir / 'vocabularies.json'
+    vocab_path = f"{args.checkpoint_dir}/vocabularies.json"
     with open(vocab_path, 'w') as f:
         json.dump({
             'verbnet_vocab': processor.verbnet_vocab,
