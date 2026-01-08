@@ -44,32 +44,12 @@ def load_model(checkpoint_path, config_path, device='cpu'):
     model.eval()
     return model, config
 
-
-def predict_batch(model, batch_data, device='cpu'):
-    """Make predictions for a batch of triplets."""
-    with torch.no_grad():
-        outputs = model(
-            batch_data['anchor'],
-            batch_data['story_a'],
-            batch_data['story_b']
-        )
-        logits = outputs['logits']  # Shape: [batch_size, 2]
-
-        # Get predictions: class 0 = A closer, class 1 = B closer
-        predictions = torch.argmax(logits, dim=1)
-
-        # Convert to boolean: True if A is closer (class 0)
-        text_a_is_closer = (predictions == 0).cpu().tolist()
-
-    return text_a_is_closer
-
 def generate_submission(
     model,
     test_file,
     output_file,
     text_model_name='sentence-transformers/all-MiniLM-L6-v2',
-    device='cpu',
-    batch_size=8
+    device='cpu'
 ):
     """
     Generate submission file from test data.
@@ -79,7 +59,6 @@ def generate_submission(
         test_file: Path to preprocessed test JSONL file
         output_file: Path to output submission JSONL
         device: 'cpu' or 'cuda'
-        batch_size: Number of instances per batch
     """
     print(f"\n{'=' * 60}")
     print(f"GENERATING SUBMISSION")
@@ -87,7 +66,7 @@ def generate_submission(
     print(f"Test file: {test_file}")
     print(f"Output: {output_file}")
     print(f"Device: {device}")
-    print(f"Batch size: {batch_size}")
+
 
     # Load test data
     print(f"\nLoading test data...")
@@ -97,27 +76,27 @@ def generate_submission(
 
     # Process in batches
     all_predictions = []
-    num_batches = (len(drs_dataset) + batch_size - 1) // batch_size
 
     model.eval()
 
     print(f"\nGenerating predictions...")
-    num_batches = (len(drs_dataset) + batch_size - 1) // batch_size
 
-    for i in tqdm(range(0, len(drs_dataset), batch_size), total=num_batches):
-        batch_indices = list(range(i, min(i + batch_size, len(drs_dataset))))
+    for i in tqdm(range(len(drs_dataset)), desc="Predicting"):
+        triplet = drs_dataset[i]
 
-        # Get batch data using processor
-        batch_data = processor.collate_fn([processor[idx] for idx in batch_indices])
+        # Process triplet (same as training)
+        anchor_data, story_a_data, story_b_data = processor.process_triplet(triplet, device)
 
-        # Move to device
-        batch_data = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                      for k, v in batch_data.items()}
+        # Get prediction (single instance)
+        with torch.no_grad():
+            output = model(anchor_data, story_a_data, story_b_data)
+            logits = output['logits']  # Shape: [1, 2] or [2]
 
-        # Get predictions
-        predictions = predict_batch(model, batch_data, device)
-        all_predictions.extend(predictions)
+            # Get prediction: class 0 = A closer, class 1 = B closer
+            pred = torch.argmax(logits, dim=-1)
+            text_a_is_closer = (pred == 0).item()
 
+        all_predictions.append(text_a_is_closer)
     # Write submission file
     print(f"\nWriting submission to {output_file}...")
     with open(output_file, 'w', encoding='utf-8') as f:
@@ -176,13 +155,6 @@ def main():
         help='Device to run inference on (default: cpu)'
     )
     parser.add_argument(
-        '--batch-size',
-        type=int,
-        default=8,
-        help='Batch size for inference (default: 8)'
-    )
-
-    parser.add_argument(
         '--text-model',
         type=str,
         default='sentence-transformers/all-MiniLM-L6-v2',
@@ -219,8 +191,7 @@ def main():
         test_file=test_file,
         output_file=args.output,
         text_model_name=args.text_model,
-        device=device,
-        batch_size=args.batch_size
+        device=device
     )
 
     print(f"\n✅ Submission ready: {output_file}")
