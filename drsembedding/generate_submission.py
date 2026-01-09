@@ -48,6 +48,7 @@ def generate_submission(
     model,
     test_file,
     output_file,
+    vocab_file,
     text_model_name='sentence-transformers/all-MiniLM-L6-v2',
     device='cpu'
 ):
@@ -72,6 +73,16 @@ def generate_submission(
     print(f"\nLoading test data...")
     drs_dataset = DRSDataset(test_file)
     processor = StoryDataProcessor(drs_dataset, text_model_name=text_model_name)
+    print(f"✓ Loaded {len(drs_dataset)} test instances")
+
+    print(f"Loading vocabularies from {vocab_file}...")
+    with open(vocab_file, 'r') as f:
+        vocabs = json.load(f)
+    processor.verbnet_vocab = vocabs['verbnet_vocab']
+    processor.predicate_vocab = vocabs['predicate_vocab']
+    print(f"✓ Loaded vocabularies:")
+    print(f"  VerbNet classes: {len(processor.verbnet_vocab)}")
+    print(f"  Logic predicates: {len(processor.predicate_vocab)}")
     print(f"✓ Loaded {len(drs_dataset)} test instances")
 
     # Process in batches
@@ -161,6 +172,13 @@ def main():
         help='Text model for sentence embeddings (default: all-MiniLM-L6-v2)'
     )
 
+    parser.add_argument(
+        '--vocab',
+        type=str,
+        required=True,
+        help='Path to vocabularies.json file from training'
+    )
+
     args = parser.parse_args()
 
     # Validate inputs
@@ -191,6 +209,7 @@ def main():
         test_file=test_file,
         output_file=args.output,
         text_model_name=args.text_model,
+        vocab_file=args.vocab,
         device=device
     )
 
