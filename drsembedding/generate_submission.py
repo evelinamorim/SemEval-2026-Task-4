@@ -104,8 +104,7 @@ def generate_submission(
             logits = output['logits']  # Shape: [1, 2] or [2]
 
             # Get prediction: class 0 = A closer, class 1 = B closer
-            pred = torch.argmax(logits, dim=-1)
-            text_a_is_closer = (pred == 0).item()
+            text_a_is_closer = (logits > 0).item()
 
         all_predictions.append(text_a_is_closer)
     # Write submission file
