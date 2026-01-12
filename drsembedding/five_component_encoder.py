@@ -57,8 +57,7 @@ class FiveComponentConfig:
     hidden_dim: int = 128           # Hidden layer size
     output_dim: int = 128           # Final fused embedding size
     dropout: float = 0.1
-    num_gnn_layers: int = 2
-
+    num_gnn_layers: int = 1
     # Text encoder
     text_model_name: str = 'all-MiniLM-L6-v2'
 

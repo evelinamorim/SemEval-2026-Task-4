@@ -255,12 +255,18 @@ class HybridEvaluator:
             # weights minimal: 0.630 
             # weights_v1: 0.610
             # weights v2: 0.620
+            #weights = {
+            #    'logic_overlap': 2.0,
+            #    'event_sequence': 1.0,
+            #    'temporal_relation_semantic': 1.0,
+            #}
             weights = {
-                'logic_overlap': 2.0,
-                'event_sequence': 1.0,
-                'temporal_relation_semantic': 1.0,
-                #'logic_semantic': 1.0
+                'logic_overlap': 1.5,
+                'event_sequence': 1.5,
+                'temporal_relation_semantic': 2.0,
+                'temporal_density': 1.0,
             }
+
             try:
                 drs_sims_a = sim_anchor_a.compute_all_similarities()
                 drs_sims_a['aggregate'] = sim_anchor_a.aggregate_similarity(weights=weights)
@@ -1019,7 +1025,8 @@ class HybridEvaluator:
             temp_b = drs_feats.get('sims_b', {}).get('temporal_relation_semantic', 0.5)
 
             # 4. FINAL WEIGHTED SCORE
-            w_text, w_struct, w_temp = 0.70, 0.30, 0
+            # w_text, w_struct, w_temp = 0.70, 0.30, 0
+            w_text, w_struct, w_temp = 0.55, 0.45, 0
 
             score_a = (w_text * text_a) + (w_struct * norm_struct_a) + (w_temp * temp_a)
             score_b = (w_text * text_b) + (w_struct * norm_struct_b) + (w_temp * temp_b)
