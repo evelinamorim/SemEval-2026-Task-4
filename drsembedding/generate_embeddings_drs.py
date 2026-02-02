@@ -24,6 +24,7 @@ Directory structure expected:
 """
 
 import torch
+import torch.nn.functional as F
 import numpy as np
 import json
 import argparse
@@ -300,10 +301,25 @@ class InferenceModel:
         # Component 4: Semantic Role
         if self.model.semantic_encoder:
             # Get hidden representations
-            event_hidden = self.model.temporal_encoder.node_encoder(story_data['event_features']) \
-                if self.model.temporal_encoder else None
-            actor_hidden = self.model.participant_encoder.node_encoder(story_data['actor_features']) \
-                if self.model.participant_encoder else None
+            # For events: node_encoder expects raw event features
+            event_hidden = None
+            if self.model.temporal_encoder and story_data['event_features'].size(0) > 0:
+                event_hidden = self.model.temporal_encoder.node_encoder(story_data['event_features'])
+
+            # For actors: we need to replicate the preprocessing from ParticipantGraphEncoder.forward()
+            # because node_encoder expects preprocessed features (2 + text_reduction_dim), not raw (386)
+            actor_hidden = None
+            if self.model.participant_encoder and story_data['actor_features'].size(0) > 0:
+                actor_features = story_data['actor_features']
+                # Split: first 2 are structural (is_event_ref, position), rest is SBERT embedding
+                struct_feat = actor_features[:, :2]
+                text_feat = actor_features[:, 2:]
+                # Project text from 384 down to text_reduction_dim (64)
+                projected_text = F.relu(self.model.participant_encoder.text_projection(text_feat))
+                # Combine back
+                h_input = torch.cat([struct_feat, projected_text], dim=1)
+                # Now pass through node_encoder
+                actor_hidden = self.model.participant_encoder.node_encoder(h_input)
 
             if event_hidden is not None and actor_hidden is not None:
                 sem_emb, _ = self.model.semantic_encoder(
