@@ -67,6 +67,9 @@ class InferenceModel:
             temporal_edges=[],
             coreference_edges=[],
             semantic_edges=[],
+            event_types=[],
+            verbnet_classes=[],
+            logic_predicates=[],
         )
 
         # Process story
