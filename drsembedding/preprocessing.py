@@ -460,6 +460,21 @@ class DRSGraphExtractor:
         return semantic_edges, coref_edges
 
 
+def process_single_story(
+        extractor: DRSGraphExtractor,
+        drs_path: str,
+        text: str = ""
+) -> Optional[Dict]:
+    """Process a single story DRS file (for Track B inference)."""
+    graph = extractor.parse_drs_file(drs_path)
+
+    if graph is None:
+        return None
+
+    result = asdict(graph)
+    result['text'] = text
+    return result
+
 def process_triplet(
     extractor: DRSGraphExtractor,
     drs_dir: str,

@@ -48,189 +48,43 @@ except ImportError as e:
 
 
 def load_drs_from_file(drs_path: Path) -> Optional[StoryGraph]:
-    """
-    Load a DRS file and parse it into a StoryGraph.
-
-    Args:
-        drs_path: Path to the DRS file
-
-    Returns:
-        StoryGraph object or None if parsing fails
-    """
+    """Load a DRS file and parse it into a StoryGraph."""
     if not drs_path.exists():
         print(f"Warning: DRS file not found: {drs_path}")
         return None
 
     try:
-        with open(drs_path, 'r', encoding='utf-8') as f:
-            drs_content = f.read()
-
-        # Parse DRS using the same logic as in data_loader.py
-        # You'll need to use whatever parsing function you have
-        # This is a placeholder - replace with your actual DRS parsing
-        story_graph = parse_drs_content(drs_content)
-
-        return story_graph
+        return parse_drs_content(str(drs_path))
     except Exception as e:
         print(f"Error parsing DRS file {drs_path}: {e}")
         return None
 
-
-def parse_drs_content(drs_text: str) -> StoryGraph:
+def parse_drs_content(drs_path: str) -> StoryGraph:
     """
-    Parse DRS text format into StoryGraph.
-
-    This function needs to be customized based on your DRS format.
-
-    IMPORTANT: Replace this with your actual DRS parsing logic!
-
-    The DRS file should contain structured information about:
-    - Events (with types, tenses, aspects, lemmas, positions)
-    - Actors/Participants (with coreference information)
-    - Temporal relations (occursBefore, occursAfter, overlaps, during)
-    - Semantic roles (agent, patient, theme, etc.)
-    - VerbNet classes
-    - Predicates
-
-    Expected output format (StoryGraph):
-        events: List[Dict] with:
-            - id: str (e.g., "e1", "e2")
-            - type: str ("State", "Process", "Transition", "Unknown")
-            - text: str (original text)
-            - lemma: str (lemmatized form)
-            - tense: str ("Past", "Present", "Future", "Unknown")
-            - aspect: str ("Perfective", "Progressive", "Unknown")
-            - vform: str ("Infinitive", "Participle", "Unknown")
-            - position: float (0.0 to 1.0, relative position in text)
-            - verbnet_class: str (optional, e.g., "run-51.3.2")
-            - predicates: List[str] (optional, e.g., ["motion", "manner"])
-
-        actors: List[Dict] with:
-            - id: str (e.g., "x1", "x2")
-            - text: str (mention text)
-            - is_event_reference: bool
-            - position: float (0.0 to 1.0)
-
-        temporal_edges: List[Dict] with:
-            - source: str (event id)
-            - target: str (event id)
-            - relation: str ("occursBefore", "occursAfter", "overlaps", "during")
-
-        coreference_edges: List[Dict] with:
-            - source: str (actor id)
-            - target: str (actor id)
-
-        semantic_edges: List[Dict] with:
-            - event_id: str
-            - actor_id: str
-            - role: str (e.g., "Agent", "Patient", "Theme")
+    Parse DRS file into StoryGraph using DRSGraphExtractor.
     """
+    from preprocessing import DRSGraphExtractor
 
-    # ========================================================================
-    # OPTION 1: If you have a DRS parsing library (recommended)
-    # ========================================================================
-    # Uncomment and modify this if you have a DRS parser:
-    """
-    try:
-        from your_drs_parser import parse_drs  # Replace with your parser
-        parsed_drs = parse_drs(drs_text)
+    extractor = DRSGraphExtractor()
+    graph = extractor.parse_drs_file(drs_path)
 
-        # Extract components from parsed DRS
-        events = parsed_drs.get_events()
-        actors = parsed_drs.get_actors()
-        temporal_edges = parsed_drs.get_temporal_relations()
-        coreference_edges = parsed_drs.get_coreference_chains()
-        semantic_edges = parsed_drs.get_semantic_roles()
-
+    if graph is None:
         return StoryGraph(
-            events=events,
-            actors=actors,
-            temporal_edges=temporal_edges,
-            coreference_edges=coreference_edges,
-            semantic_edges=semantic_edges,
+            events=[], actors=[], temporal_edges=[],
+            coreference_edges=[], semantic_edges=[],
+            event_types=[], verbnet_classes=[], logic_predicates=[],
         )
-    except Exception as e:
-        print(f"Warning: DRS parsing failed: {e}")
-        return None
-    """
 
-    # ========================================================================
-    # OPTION 2: If your DRS is in JSON format
-    # ========================================================================
-    # Uncomment and modify if your DRS files are JSON:
-    """
-    try:
-        import json
-        drs_data = json.loads(drs_text)
-
-        return StoryGraph(
-            events=drs_data.get("events", []),
-            actors=drs_data.get("actors", []),
-            temporal_edges=drs_data.get("temporal_edges", []),
-            coreference_edges=drs_data.get("coreference_edges", []),
-            semantic_edges=drs_data.get("semantic_edges", []),
-        )
-    except Exception as e:
-        print(f"Warning: JSON parsing failed: {e}")
-        return None
-    """
-
-    # ========================================================================
-    # OPTION 3: If you use text2story or similar library
-    # ========================================================================
-    # Uncomment if you use text2story:
-    """
-    try:
-        from text2story import parse_narrative
-
-        parsed = parse_narrative(drs_text)
-
-        # Convert to StoryGraph format
-        events = [
-            {
-                'id': e.id,
-                'type': e.event_type,
-                'text': e.text,
-                'lemma': e.lemma,
-                'tense': e.tense,
-                'aspect': e.aspect,
-                'vform': e.vform,
-                'position': e.position,
-                'verbnet_class': e.verbnet_class,
-                'predicates': e.predicates,
-            }
-            for e in parsed.events
-        ]
-
-        # Similar for actors, edges, etc.
-
-        return StoryGraph(
-            events=events,
-            actors=...,
-            temporal_edges=...,
-            coreference_edges=...,
-            semantic_edges=...,
-        )
-    except Exception as e:
-        print(f"Warning: text2story parsing failed: {e}")
-        return None
-    """
-
-    # ========================================================================
-    # FALLBACK: Return empty StoryGraph (text-only mode)
-    # ========================================================================
-    print("Warning: Using text-only mode (no DRS parsing implemented)")
     return StoryGraph(
-        events=[],
-        actors=[],
-        temporal_edges=[],
-        coreference_edges=[],
-        semantic_edges=[],
-        event_types=[],
-        verbnet_classes=[],
-        logic_predicates=[],
+        events=graph.events,
+        actors=graph.actors,
+        temporal_edges=graph.temporal_edges,
+        coreference_edges=graph.coreference_edges,
+        semantic_edges=graph.semantic_edges,
+        event_types=graph.event_types,
+        verbnet_classes=graph.verbnet_classes,
+        logic_predicates=graph.logic_predicates,
     )
-
 
 class InferenceModel:
     """Wrapper for the five-component model for inference with DRS."""
