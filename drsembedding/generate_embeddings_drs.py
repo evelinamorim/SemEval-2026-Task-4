@@ -142,7 +142,6 @@ def parse_drs_content(drs_text: str) -> StoryGraph:
         semantic_edges = parsed_drs.get_semantic_roles()
 
         return StoryGraph(
-            story_id="parsed",
             events=events,
             actors=actors,
             temporal_edges=temporal_edges,
@@ -164,7 +163,6 @@ def parse_drs_content(drs_text: str) -> StoryGraph:
         drs_data = json.loads(drs_text)
 
         return StoryGraph(
-            story_id=drs_data.get("story_id", "parsed"),
             events=drs_data.get("events", []),
             actors=drs_data.get("actors", []),
             temporal_edges=drs_data.get("temporal_edges", []),
@@ -206,7 +204,6 @@ def parse_drs_content(drs_text: str) -> StoryGraph:
         # Similar for actors, edges, etc.
 
         return StoryGraph(
-            story_id="parsed",
             events=events,
             actors=...,
             temporal_edges=...,
@@ -223,7 +220,6 @@ def parse_drs_content(drs_text: str) -> StoryGraph:
     # ========================================================================
     print("Warning: Using text-only mode (no DRS parsing implemented)")
     return StoryGraph(
-        story_id="parsed",
         events=[],
         actors=[],
         temporal_edges=[],
@@ -256,7 +252,6 @@ class InferenceModel:
         # Use provided story_graph or create empty one
         if story_graph is None:
             story_graph = StoryGraph(
-                story_id="inference",
                 events=[],
                 actors=[],
                 temporal_edges=[],

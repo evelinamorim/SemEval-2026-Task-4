@@ -62,7 +62,6 @@ class InferenceModel:
         """
         # Create minimal story graph (empty DRS structure)
         story_graph = StoryGraph(
-            story_id="inference",
             events=[],
             actors=[],
             temporal_edges=[],
