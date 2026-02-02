@@ -1,26 +1,21 @@
 """
-Generate Track B Embeddings with DRS Annotations
+Generate Track B Embeddings from Preprocessed DRS Data
 
-This script loads test data from:
-1. JSONL file with story texts (one per line)
-2. Directory with DRS files (named {line_number}_drs.txt)
+This script loads preprocessed Track B data and generates embeddings.
 
 Usage:
-    python generate_embeddings_with_drs.py \
-        --checkpoint checkpoints_five \
+    # Step 1: Preprocess the data
+    python preprocess_track_b.py \
         --test_json track_b_test.jsonl \
         --drs_dir track_b_drs \
+        --output track_b_preprocessed.jsonl
+
+    # Step 2: Generate embeddings
+    python generate_embeddings_drs.py \
+        --checkpoint checkpoints_five \
+        --preprocessed track_b_preprocessed.jsonl \
         --output track_b_embeddings \
         --create_zip
-
-Directory structure expected:
-    track_b_test.jsonl          # Line 0: {"text": "..."}
-                                # Line 1: {"text": "..."}
-    track_b_drs/
-        0_drs.txt              # DRS for line 0
-        1_drs.txt              # DRS for line 1
-        2_drs.txt              # DRS for line 2
-        ...
 """
 
 import torch
@@ -29,7 +24,7 @@ import numpy as np
 import json
 import argparse
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 import time
 import sys
 
@@ -40,54 +35,41 @@ try:
         FiveComponentModel,
         StoryDataProcessor,
     )
-    from data_loader import StoryGraph, DRSDataset
+    from data_loader import StoryGraph
 except ImportError as e:
     print(f"Error: Could not import required modules: {e}")
     print("Make sure five_component_encoder.py and data_loader.py are in the same directory")
     sys.exit(1)
 
 
-def load_drs_from_file(drs_path: Path) -> Optional[StoryGraph]:
-    """Load a DRS file and parse it into a StoryGraph."""
-    if not drs_path.exists():
-        print(f"Warning: DRS file not found: {drs_path}")
-        return None
+def load_preprocessed_data(jsonl_path: str) -> List[Dict[str, Any]]:
+    """Load preprocessed Track B data."""
+    data = []
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                item = json.loads(line)
+                data.append(item)
+    return data
 
-    try:
-        return parse_drs_content(str(drs_path))
-    except Exception as e:
-        print(f"Error parsing DRS file {drs_path}: {e}")
-        return None
 
-def parse_drs_content(drs_path: str) -> StoryGraph:
-    """
-    Parse DRS file into StoryGraph using DRSGraphExtractor.
-    """
-    from preprocessing import DRSGraphExtractor
-
-    extractor = DRSGraphExtractor()
-    graph = extractor.parse_drs_file(drs_path)
-
-    if graph is None:
-        return StoryGraph(
-            events=[], actors=[], temporal_edges=[],
-            coreference_edges=[], semantic_edges=[],
-            event_types=[], verbnet_classes=[], logic_predicates=[],
-        )
-
+def item_to_story_graph(item: Dict[str, Any]) -> StoryGraph:
+    """Convert preprocessed item to StoryGraph object."""
     return StoryGraph(
-        events=graph.events,
-        actors=graph.actors,
-        temporal_edges=graph.temporal_edges,
-        coreference_edges=graph.coreference_edges,
-        semantic_edges=graph.semantic_edges,
-        event_types=graph.event_types,
-        verbnet_classes=graph.verbnet_classes,
-        logic_predicates=graph.logic_predicates,
+        events=item.get('events', []),
+        actors=item.get('actors', []),
+        temporal_edges=item.get('temporal_edges', []),
+        coreference_edges=item.get('coreference_edges', []),
+        semantic_edges=item.get('semantic_edges', []),
+        event_types=item.get('event_types', {}),
+        verbnet_classes=item.get('verbnet_classes', {}),
+        logic_predicates=item.get('logic_predicates', []),
     )
 
+
 class InferenceModel:
-    """Wrapper for the five-component model for inference with DRS."""
+    """Wrapper for the five-component model for inference."""
 
     def __init__(self, model: FiveComponentModel, processor: StoryDataProcessor, device: str):
         self.model = model
@@ -96,86 +78,47 @@ class InferenceModel:
         self.model.eval()
 
     @torch.no_grad()
-    def encode_single_story(self, text: str, story_graph: Optional[StoryGraph]) -> np.ndarray:
+    def encode_single_story(self, text: str, story_graph: StoryGraph) -> np.ndarray:
         """
-        Encode a single story with text and optional DRS.
-
-        Args:
-            text: Story text
-            story_graph: Parsed DRS (StoryGraph), or None for text-only
-
-        Returns:
-            embedding: numpy array of shape [output_dim]
+        Encode a single story using the same logic as model.encode_story().
         """
-        # Use provided story_graph or create empty one
-        if story_graph is None:
-            story_graph = StoryGraph(
-                events=[],
-                actors=[],
-                temporal_edges=[],
-                coreference_edges=[],
-                semantic_edges=[],
-                event_types=[],
-                verbnet_classes=[],
-                logic_predicates=[],
-            )
-
-        # Process story
+        # Process story data
         story_data = self.processor.process_story(story_graph, text, self.device)
 
-        # Extract embeddings from each component
-        component_embeddings = []
+        components = []
+        event_hidden = None
+        actor_hidden = None
 
         # Component 1: Temporal
-        if self.model.temporal_encoder:
-            temp_emb, _ = self.model.temporal_encoder(
+        if self.model.temporal_encoder is not None:
+            temp_emb, event_hidden = self.model.temporal_encoder(
                 story_data['event_features'],
                 story_data['temporal_adjacency'],
                 story_data['temporal_edge_types'],
             )
-            component_embeddings.append(temp_emb)
+            components.append(temp_emb)
 
         # Component 2: Logical
-        if self.model.logical_encoder:
+        if self.model.logical_encoder is not None:
             log_emb = self.model.logical_encoder(
                 story_data['event_type_dist'],
                 story_data['verbnet_indices'],
                 story_data['predicate_multihot'],
             )
-            component_embeddings.append(log_emb)
+            components.append(log_emb)
 
         # Component 3: Participant
-        if self.model.participant_encoder:
-            part_emb, _ = self.model.participant_encoder(
+        if self.model.participant_encoder is not None:
+            part_emb, actor_hidden = self.model.participant_encoder(
                 story_data['actor_features'],
                 story_data['coref_adjacency'],
             )
-            component_embeddings.append(part_emb)
+            components.append(part_emb)
 
-        # Component 4: Semantic Role
-        if self.model.semantic_encoder:
-            # Get hidden representations
-            # For events: node_encoder expects raw event features
-            event_hidden = None
-            if self.model.temporal_encoder and story_data['event_features'].size(0) > 0:
-                event_hidden = self.model.temporal_encoder.node_encoder(story_data['event_features'])
-
-            # For actors: we need to replicate the preprocessing from ParticipantGraphEncoder.forward()
-            # because node_encoder expects preprocessed features (2 + text_reduction_dim), not raw (386)
-            actor_hidden = None
-            if self.model.participant_encoder and story_data['actor_features'].size(0) > 0:
-                actor_features = story_data['actor_features']
-                # Split: first 2 are structural (is_event_ref, position), rest is SBERT embedding
-                struct_feat = actor_features[:, :2]
-                text_feat = actor_features[:, 2:]
-                # Project text from 384 down to text_reduction_dim (64)
-                projected_text = F.relu(self.model.participant_encoder.text_projection(text_feat))
-                # Combine back
-                h_input = torch.cat([struct_feat, projected_text], dim=1)
-                # Now pass through node_encoder
-                actor_hidden = self.model.participant_encoder.node_encoder(h_input)
-
-            if event_hidden is not None and actor_hidden is not None:
+        # Component 4: Semantic
+        if self.model.semantic_encoder is not None and event_hidden is not None and actor_hidden is not None:
+            # Only compute if we have both event and actor representations
+            if event_hidden.size(0) > 0 and actor_hidden.size(0) > 0:
                 sem_emb, _ = self.model.semantic_encoder(
                     event_hidden,
                     actor_hidden,
@@ -183,22 +126,26 @@ class InferenceModel:
                     story_data['event_id_to_idx'],
                     story_data['actor_id_to_idx'],
                 )
-                component_embeddings.append(sem_emb)
+                components.append(sem_emb)
 
         # Component 5: Text
-        if self.model.text_encoder:
+        if self.model.text_encoder is not None:
             text_emb = self.model.text_encoder(story_data['text'])
-            component_embeddings.append(text_emb)
+            components.append(text_emb)
 
-        # Fuse all components
-        if component_embeddings:
-            fused = torch.cat(component_embeddings, dim=-1)
-            embedding = self.model.fusion(fused)
-        else:
-            # Fallback if no components enabled
-            embedding = torch.zeros(self.model.config.output_dim, device=self.device)
+        # Apply learnable component weights (same as encode_story)
+        weights = F.softmax(self.model.component_weights, dim=0)
+        weighted_components = []
+        for i, comp in enumerate(components):
+            # Clone inference tensors (e.g., from frozen SBERT)
+            if comp.is_inference():
+                comp = comp.clone()
+            weighted_components.append(comp * weights[i])
 
-        # Convert to numpy
+        # Concatenate and fuse
+        combined = torch.cat(weighted_components, dim=-1)
+        embedding = self.model.fusion(combined)
+
         return embedding.cpu().numpy()
 
 
@@ -272,125 +219,64 @@ def load_model_and_config(checkpoint_dir: str, device: str = 'cpu') -> Inference
     model = model.to(device)
 
     # Load checkpoint
-    checkpoint_path = checkpoint_dir / 'best_model.pt'
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    checkpoint_files = list(checkpoint_dir.glob('checkpoint_epoch_*.pt'))
+    if not checkpoint_files:
+        # Try best_model.pt
+        best_model_path = checkpoint_dir / 'best_model.pt'
+        if best_model_path.exists():
+            checkpoint_path = best_model_path
+        else:
+            raise FileNotFoundError(f"No checkpoint found in {checkpoint_dir}")
+    else:
+        # Use latest checkpoint
+        checkpoint_path = max(checkpoint_files, key=lambda p: int(p.stem.split('_')[-1]))
 
+    print(f"\n✓ Loading checkpoint: {checkpoint_path}")
     checkpoint = torch.load(checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
 
-    print(f"✓ Loaded model from {checkpoint_path}")
-    print(f"  Epoch: {checkpoint['epoch']}")
-    print(f"  Best validation accuracy: {checkpoint['best_val_acc'] * 100:.2f}%")
-
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"  Total parameters: {total_params:,}")
+    print(f"  Epoch: {checkpoint.get('epoch', 'N/A')}")
+    print(f"  Validation accuracy: {checkpoint.get('val_acc', 'N/A')}")
 
     return InferenceModel(model, processor, device)
 
 
-def load_test_data(test_json_path: str, drs_dir: str) -> List[Dict]:
-    """
-    Load test data from JSON and DRS files.
-
-    Returns:
-        List of dicts with 'text', 'drs_path', 'line_num'
-    """
-    test_json_path = Path(test_json_path)
-    drs_dir = Path(drs_dir)
-
-    if not test_json_path.exists():
-        raise FileNotFoundError(f"Test JSON not found: {test_json_path}")
-
-    if not drs_dir.exists():
-        raise FileNotFoundError(f"DRS directory not found: {drs_dir}")
-
-    print("\n" + "=" * 70)
-    print("LOADING TEST DATA")
-    print("=" * 70)
-
-    test_data = []
-    with open(test_json_path, 'r') as f:
-        for line_num, line in enumerate(f):
-            if line.strip():
-                try:
-                    data = json.loads(line)
-                    if 'text' not in data:
-                        raise ValueError(f"Line {line_num}: Missing 'text' field")
-
-                    # Find corresponding DRS file
-                    drs_path = drs_dir / f"{line_num}_drs.txt"
-
-                    test_data.append({
-                        'text': data['text'],
-                        'drs_path': drs_path,
-                        'line_num': line_num,
-                    })
-                except json.JSONDecodeError as e:
-                    raise ValueError(f"Line {line_num}: Invalid JSON - {e}")
-
-    print(f"✓ Loaded {len(test_data)} stories from {test_json_path}")
-
-    # Check how many DRS files exist
-    drs_found = sum(1 for item in test_data if item['drs_path'].exists())
-    drs_missing = len(test_data) - drs_found
-
-    print(f"✓ Found {drs_found} DRS files in {drs_dir}")
-    if drs_missing > 0:
-        print(f"⚠ Warning: {drs_missing} DRS files missing (will use text-only for these)")
-
-    return test_data
-
-
 def generate_embeddings(
-        inference_model: InferenceModel,
-        test_data: List[Dict],
+    inference_model: InferenceModel,
+    preprocessed_data: List[Dict[str, Any]]
 ) -> np.ndarray:
-    """
-    Generate embeddings for all test stories using text + DRS.
-
-    Returns:
-        embeddings: numpy array of shape [num_stories, embedding_dim]
-    """
+    """Generate embeddings for all preprocessed stories."""
     print("\n" + "=" * 70)
     print("GENERATING EMBEDDINGS")
     print("=" * 70)
-    print(f"Processing {len(test_data)} stories...")
+    print(f"Processing {len(preprocessed_data)} stories...")
 
     all_embeddings = []
-    drs_loaded = 0
-    drs_failed = 0
-    text_only = 0
-
     start_time = time.time()
 
-    for i, item in enumerate(test_data):
-        text = item['text']
-        drs_path = item['drs_path']
+    with_drs = 0
+    without_drs = 0
 
-        # Try to load DRS
-        story_graph = None
-        if drs_path.exists():
-            story_graph = load_drs_from_file(drs_path)
-            if story_graph is not None:
-                drs_loaded += 1
-            else:
-                drs_failed += 1
+    for i, item in enumerate(preprocessed_data):
+        text = item.get('text', '')
+        story_graph = item_to_story_graph(item)
+
+        # Track stats
+        if item.get('has_drs', False) or len(item.get('events', [])) > 0:
+            with_drs += 1
         else:
-            text_only += 1
+            without_drs += 1
 
         # Generate embedding
         embedding = inference_model.encode_single_story(text, story_graph)
         all_embeddings.append(embedding)
 
         # Progress update
-        if (i + 1) % 100 == 0 or (i + 1) == len(test_data):
+        if (i + 1) % 100 == 0 or (i + 1) == len(preprocessed_data):
             elapsed = time.time() - start_time
             rate = (i + 1) / elapsed
-            eta = (len(test_data) - i - 1) / rate if rate > 0 else 0
-            print(f"  [{i + 1}/{len(test_data)}] {rate:.1f} stories/s, ETA: {eta:.0f}s "
-                  f"(DRS: {drs_loaded}, Text-only: {text_only + drs_failed})")
+            eta = (len(preprocessed_data) - i - 1) / rate if rate > 0 else 0
+            print(f"  [{i + 1}/{len(preprocessed_data)}] {rate:.1f} stories/s, ETA: {eta:.0f}s")
 
     # Stack into single array
     embeddings = np.stack(all_embeddings, axis=0)
@@ -400,9 +286,8 @@ def generate_embeddings(
     print(f"  Shape: {embeddings.shape}")
     print(f"  Mean: {embeddings.mean():.4f}, Std: {embeddings.std():.4f}")
     print(f"\n  Statistics:")
-    print(f"    - With DRS: {drs_loaded}")
-    print(f"    - Text-only: {text_only}")
-    print(f"    - DRS parse failed: {drs_failed}")
+    print(f"    - With DRS: {with_drs}")
+    print(f"    - Text-only: {without_drs}")
 
     return embeddings
 
@@ -475,24 +360,22 @@ def create_submission_zip(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Generate Track B embeddings with DRS annotations',
+        description='Generate Track B embeddings from preprocessed DRS data',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate embeddings with DRS
-  python generate_embeddings_with_drs.py \\
-      --checkpoint checkpoints_five \\
+  # Step 1: Preprocess (run preprocess_track_b.py first)
+  python preprocess_track_b.py \\
       --test_json track_b_test.jsonl \\
       --drs_dir track_b_drs \\
+      --output track_b_preprocessed.jsonl
+
+  # Step 2: Generate embeddings
+  python generate_embeddings_drs.py \\
+      --checkpoint checkpoints_five \\
+      --preprocessed track_b_preprocessed.jsonl \\
       --output track_b_embeddings \\
       --create_zip
-
-Directory structure:
-  track_b_test.jsonl     # Line 0: {"text": "..."}
-  track_b_drs/
-      0_drs.txt          # DRS for line 0
-      1_drs.txt          # DRS for line 1
-      ...
         """
     )
     parser.add_argument(
@@ -502,16 +385,10 @@ Directory structure:
         help='Path to checkpoint directory'
     )
     parser.add_argument(
-        '--test_json',
+        '--preprocessed',
         type=str,
         required=True,
-        help='Path to test JSONL file'
-    )
-    parser.add_argument(
-        '--drs_dir',
-        type=str,
-        required=True,
-        help='Path to directory with DRS files (named {line_num}_drs.txt)'
+        help='Path to preprocessed JSONL file (from preprocess_track_b.py)'
     )
     parser.add_argument(
         '--output',
@@ -547,22 +424,25 @@ Directory structure:
         device = args.device
 
     print("\n" + "=" * 70)
-    print("TRACK B EMBEDDING GENERATION WITH DRS")
+    print("TRACK B EMBEDDING GENERATION")
     print("=" * 70)
     print(f"Device: {device}")
     print(f"Checkpoint: {args.checkpoint}")
-    print(f"Test JSON: {args.test_json}")
-    print(f"DRS directory: {args.drs_dir}")
+    print(f"Preprocessed data: {args.preprocessed}")
 
     try:
         # Load model
         inference_model = load_model_and_config(args.checkpoint, device)
 
-        # Load test data
-        test_data = load_test_data(args.test_json, args.drs_dir)
+        # Load preprocessed data
+        print("\n" + "=" * 70)
+        print("LOADING PREPROCESSED DATA")
+        print("=" * 70)
+        preprocessed_data = load_preprocessed_data(args.preprocessed)
+        print(f"✓ Loaded {len(preprocessed_data)} stories")
 
         # Generate embeddings
-        embeddings = generate_embeddings(inference_model, test_data)
+        embeddings = generate_embeddings(inference_model, preprocessed_data)
 
         # Check embedding dimension constraints
         emb_dim = embeddings.shape[1]
