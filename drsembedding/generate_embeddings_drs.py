@@ -119,7 +119,7 @@ class InferenceModel:
         if self.model.semantic_encoder is not None and event_hidden is not None and actor_hidden is not None:
             # Only compute if we have both event and actor representations
             if event_hidden.size(0) > 0 and actor_hidden.size(0) > 0:
-                sem_emb, _ = self.model.semantic_encoder(
+                sem_emb = self.model.semantic_encoder(
                     event_hidden,
                     actor_hidden,
                     story_data['semantic_edges'],
