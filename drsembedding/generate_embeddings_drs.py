@@ -389,7 +389,7 @@ def load_model_and_config(checkpoint_dir: str, device: str = 'cpu') -> Inference
 
     # Create processor with loaded vocabularies
     processor = StoryDataProcessor(
-        drs_dataset=None,
+        dataset=None,
         text_model_name=config.text_model_name,
     )
     processor.verbnet_vocab = vocabs['verbnet_vocab']
