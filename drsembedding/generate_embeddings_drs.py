@@ -368,6 +368,7 @@ def load_model_and_config(checkpoint_dir: str, device: str = 'cpu') -> Inference
         text_model_name=config_dict['text_model_name'],
         num_verbnet_classes=config_dict['num_verbnet_classes'],
         num_predicates=config_dict['num_predicates'],
+        num_gnn_layers=config_dict.get('num_gnn_layers', 2),
         use_temporal=config_dict['use_temporal'],
         use_logical=config_dict['use_logical'],
         use_participant=config_dict['use_participant'],
