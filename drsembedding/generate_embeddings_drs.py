@@ -339,7 +339,7 @@ class InferenceModel:
         # Fuse all components
         if component_embeddings:
             fused = torch.cat(component_embeddings, dim=-1)
-            embedding = self.model.fusion_layer(fused)
+            embedding = self.model.fusion(fused)
         else:
             # Fallback if no components enabled
             embedding = torch.zeros(self.model.config.output_dim, device=self.device)
