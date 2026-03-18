@@ -43,13 +43,4 @@ python drs_text_baseline.py data/drs/ data/dev_track_a.jsonl
 
 ## Citation
 
-If you use this code, please cite our system paper:
-
-```
-@inproceedings{amorim2026liaad,
-  title     = {LIAAD INESCTEC at SemEval-2026 Task 4: Unsupervised Narrative Similarity via Discourse Representation Structures and Sentence Embeddings},
-  author    = {Amorim, Evelin and Jorge, Al{\'i}pio and Silvano, Purifica{\c{c}}{\~a}o},
-  booktitle = {Proceedings of the 20th International Workshop on Semantic Evaluation (SemEval-2026)},
-  year      = {2026}
-}
-```
+coming soon
