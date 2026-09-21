@@ -255,17 +255,17 @@ class HybridEvaluator:
             # weights minimal: 0.630 
             # weights_v1: 0.610
             # weights v2: 0.620
-            #weights = {
-            #    'logic_overlap': 2.0,
-            #    'event_sequence': 1.0,
-            #    'temporal_relation_semantic': 1.0,
-            #}
             weights = {
-                'logic_overlap': 1.5,
-                'event_sequence': 1.5,
-                'temporal_relation_semantic': 2.0,
-                'temporal_density': 1.0,
+               'logic_overlap': 2.0,
+               'event_sequence': 1.0,
+               'temporal_relation_semantic': 1.0,
             }
+            # weights = {
+            #     'logic_overlap': 1.5,
+            #     'event_sequence': 1.5,
+            #     'temporal_relation_semantic': 2.0,
+            #     'temporal_density': 1.0,
+            # }
 
             try:
                 drs_sims_a = sim_anchor_a.compute_all_similarities()
@@ -839,39 +839,39 @@ class HybridEvaluator:
             'skipped': skipped
         }
 
-    def _compute_aggregate_score(self, drs_sims):
-        """
-        Compute aggregate similarity score from individual metrics.
+    # def _compute_aggregate_score(self, drs_sims):
+    #     """
+    #     Compute aggregate similarity score from individual metrics.
 
-        Uses weighted combination of all DRS similarity metrics.
+    #     Uses weighted combination of all DRS similarity metrics.
 
-        Args:
-            drs_sims: Dictionary of similarity scores
+    #     Args:
+    #         drs_sims: Dictionary of similarity scores
 
-        Returns:
-            float: Aggregate similarity score
-        """
-        # Weights for different metrics (adjust based on importance)
-        weights = {
-            'logic_overlap': 2.0,
-            'event_sequence': 1.0,
-            'temporal_relation_semantic': 1.0,
-            #'logic_semantic': 1.0
-        }
+    #     Returns:
+    #         float: Aggregate similarity score
+    #     """
+    #     # Weights for different metrics (adjust based on importance)
+    #     weights = {
+    #         'logic_overlap': 2.0,
+    #         'event_sequence': 1.0,
+    #         'temporal_relation_semantic': 1.0,
+    #         #'logic_semantic': 1.0
+    #     }
 
-        aggregate = 0.0
-        total_weight = 0.0
+    #     aggregate = 0.0
+    #     total_weight = 0.0
 
-        for metric, weight in weights.items():
-            if metric in drs_sims:
-                aggregate += weight * drs_sims[metric]
-                total_weight += weight
+    #     for metric, weight in weights.items():
+    #         if metric in drs_sims:
+    #             aggregate += weight * drs_sims[metric]
+    #             total_weight += weight
 
-        # Normalize by actual total weight (in case some metrics are missing)
-        if total_weight > 0:
-            aggregate /= total_weight
+    #     # Normalize by actual total weight (in case some metrics are missing)
+    #     if total_weight > 0:
+    #         aggregate /= total_weight
 
-        return aggregate
+    #     return aggregate
 
     def evaluate_drs_only(self, similarity_method='cosine', dataset='test', verbose=False):
         """
@@ -912,8 +912,8 @@ class HybridEvaluator:
 
             # Get similarity scores (handle 'aggregate' specially)
             if similarity_method == 'aggregate':
-                score_a = self._compute_aggregate_score(drs_feat['sims_a'])
-                score_b = self._compute_aggregate_score(drs_feat['sims_b'])
+                score_a = drs_feat['sims_a']['aggregate']
+                score_b = drs_feat['sims_b']['aggregate']
             else:
                 # Check if method exists
                 if similarity_method not in drs_feat['sims_a']:
@@ -1352,7 +1352,7 @@ if __name__ == "__main__":
         test_jsonl = sys.argv[4]
 
         evaluator = HybridEvaluator(
-            text_model='all-mpnet-base-v2',
+            text_model='paraphrase-multilingual-mpnet-base-v2',
             train_drs_dir=train_drs_dir,
             train_jsonl=train_jsonl,
             test_drs_dir=test_drs_dir,
