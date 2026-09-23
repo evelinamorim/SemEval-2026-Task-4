@@ -1352,7 +1352,7 @@ if __name__ == "__main__":
         test_jsonl = sys.argv[4]
 
         evaluator = HybridEvaluator(
-            text_model='paraphrase-multilingual-mpnet-base-v2',
+            text_model='sentence-t5-base',
             train_drs_dir=train_drs_dir,
             train_jsonl=train_jsonl,
             test_drs_dir=test_drs_dir,
