@@ -235,29 +235,8 @@ class DRSParser:
 
         return self
 
-    def _split_sections(self, content):
-        """Split DRS content into sections (EVENTS, ACTORS, RELATIONS)."""
-        sections = {}
-        current_section = None
-        current_content = []
 
-        for line in content.split('\n'):
-            if line.startswith('» '):
-                # Save previous section
-                if current_section:
-                    sections[current_section] = '\n'.join(current_content)
-
-                # Start new section
-                current_section = line.replace('» ', '').strip()
-                current_content = []
-            else:
-                current_content.append(line)
-
-        # Save last section
-        if current_section:
-            sections[current_section] = '\n'.join(current_content)
-
-        return sections
+    
 
     def _parse_events(self, events_section):
         """
