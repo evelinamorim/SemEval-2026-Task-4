@@ -12,7 +12,9 @@ import re
 from collections import defaultdict, Counter
 import networkx as nx
 from nltk.corpus import verbnet as vn
-
+import json
+import glob
+import os
 import spacy
 
 
@@ -730,34 +732,121 @@ def extract_features(filepath):
     parser = parse_drs_file(filepath)
     return parser.get_feature_vector()
 
+def _load_data(jsonl_path):
+    """
+    Load all data from jsonl exactly as done in drs_text_baseline.py.
+    """
+    if jsonl_path is None or not os.path.exists(jsonl_path):
+        print(f"Warning: JSONL path not found: {jsonl_path}")
+        return []
+
+    data = []
+    with open(jsonl_path, 'r', encoding='utf-8') as f:
+        for idx, line in enumerate(f):
+            item = json.loads(line)
+            # Subtract 1 from the JSON 1-based 'id' so it matches DRS 0-based filenames
+            item['idx'] = int(item['id']) - 1 if 'id' in item else idx
+            data.append(item)
+    return data
+
+def check_dataset_properties(drs_dir, jsonl_path):
+    """
+    Inspect dataset files for:
+    1. Count of the token 'will' in the original JSON text
+    2. future_ratio (from DRS)
+    3. Count of patient semantic relations (from DRS)
+    4. Count of process events (from DRS)
+    5. Count of occursAfter temporal relations (from DRS)
+    """
+    data = _load_data(jsonl_path)
+    if not data:
+        print(f"No records loaded from {jsonl_path}")
+        return
+
+    # Table header
+    header = f"{'Story':<12} | {'Will in JSON':<13} | {'Future Ratio':<13} | {'Patients':<9} | {'Process':<8} | {'OccursAfter':<11}"
+    print(header)
+    print("-" * len(header))
+
+    will_regex = re.compile(r'\bwill\b', re.IGNORECASE)
+    suffixes = [('anchor', 'anchor_text'), ('a', 'text_a'), ('b', 'text_b')]
+
+    for item in data:
+        idx = item['idx']
+
+        for suffix, text_key in suffixes:
+            story_id = f"{idx}_{suffix}"
+            display_id = f"{idx + 1}_{suffix}"
+            drs_filename = f"{story_id}_drs.txt"
+            drs_filepath = os.path.join(drs_dir, drs_filename)
+
+            # Skip if the corresponding DRS file does not exist
+            if not os.path.exists(drs_filepath):
+                continue
+
+            # 1. Count occurrences of 'will' in the original text from the JSON object
+            raw_text = item.get(text_key, '')
+            will_count = len(will_regex.findall(raw_text)) if raw_text else 0
+
+            # Fast parsing: only parse basic DRS sections (no spaCy, VerbNet, or Graph calls)
+            parser = DRSParser(drs_filepath)
+            parser.parse()
+
+            # Retrieve distributions from internal parsed structures
+            num_events = max(parser.get_event_count(), 1)
+            tenses = parser.get_tense_distribution()
+            event_types = parser.get_event_type_distribution()
+            temp_rels = parser.get_temporal_relation_types()
+            sem_rels = parser.get_semantic_relation_types()
+
+            # 2. future_ratio
+            future_ratio = tenses.get('Future', 0) / num_events
+
+            # 3. Patient semantic relation count
+            patient_count = sem_rels.get('patient', 0)
+
+            # 4. Process event type count
+            process_count = event_types.get('Process', 0)
+
+            # 5. occursAfter temporal relation count
+            occurs_after_count = temp_rels.get('occursAfter', 0)
+
+            print(f"{display_id:<12} | {will_count:<13} | {future_ratio:<13.4f} | {patient_count:<9} | {process_count:<8} | {occurs_after_count:<11}")
+
 
 # ========== Testing ==========
 
+# if __name__ == "__main__":
+#     import sys
+
+#     if len(sys.argv) < 2:
+#         print("Usage: python drs_parser.py <drs_file>")
+#         print("\nExample:")
+#         print("  python drs_parser.py 0_anchor_drs.txt")
+#         sys.exit(1)
+
+#     filepath = sys.argv[1]
+
+#     print(f"Parsing: {filepath}")
+#     print("=" * 60)
+
+#     parser = parse_drs_file(filepath)
+
+#     print(f"\n{parser}")
+#     print("\nEvent Type Distribution:", dict(parser.get_event_type_distribution()))
+#     print("Tense Distribution:", dict(parser.get_tense_distribution()))
+#     print("Temporal Relations:", dict(parser.get_temporal_relation_types()))
+#     print(f"\nTemporal Density: {parser.get_temporal_density():.3f}")
+
+#     print("\n" + "=" * 60)
+#     print("FEATURE VECTOR:")
+#     print("=" * 60)
+#     features = parser.get_feature_vector()
+#     for key, value in sorted(features.items()):
+#         print(f"  {key:30s}: {value}")
+
 if __name__ == "__main__":
-    import sys
+    DRS_DIR = os.path.join("NarrativeSimilarity", "drs_synth")
+    JSONL_PATH = os.path.join("NarrativeSimilarity", "dev", "synthetic", "synthetic_data_for_classification.jsonl")
 
-    if len(sys.argv) < 2:
-        print("Usage: python drs_parser.py <drs_file>")
-        print("\nExample:")
-        print("  python drs_parser.py 0_anchor_drs.txt")
-        sys.exit(1)
-
-    filepath = sys.argv[1]
-
-    print(f"Parsing: {filepath}")
-    print("=" * 60)
-
-    parser = parse_drs_file(filepath)
-
-    print(f"\n{parser}")
-    print("\nEvent Type Distribution:", dict(parser.get_event_type_distribution()))
-    print("Tense Distribution:", dict(parser.get_tense_distribution()))
-    print("Temporal Relations:", dict(parser.get_temporal_relation_types()))
-    print(f"\nTemporal Density: {parser.get_temporal_density():.3f}")
-
-    print("\n" + "=" * 60)
-    print("FEATURE VECTOR:")
-    print("=" * 60)
-    features = parser.get_feature_vector()
-    for key, value in sorted(features.items()):
-        print(f"  {key:30s}: {value}")
+    check_dataset_properties(DRS_DIR, JSONL_PATH)
