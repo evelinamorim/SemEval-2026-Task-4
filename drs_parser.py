@@ -238,7 +238,7 @@ class DRSParser:
         return self
 
 
-    
+
 
     def _parse_events(self, events_section):
         """
@@ -814,39 +814,39 @@ def check_dataset_properties(drs_dir, jsonl_path):
             print(f"{display_id:<12} | {will_count:<13} | {future_ratio:<13.4f} | {patient_count:<9} | {process_count:<8} | {occurs_after_count:<11}")
 
 
-# ========== Testing ==========
-
-# if __name__ == "__main__":
-#     import sys
-
-#     if len(sys.argv) < 2:
-#         print("Usage: python drs_parser.py <drs_file>")
-#         print("\nExample:")
-#         print("  python drs_parser.py 0_anchor_drs.txt")
-#         sys.exit(1)
-
-#     filepath = sys.argv[1]
-
-#     print(f"Parsing: {filepath}")
-#     print("=" * 60)
-
-#     parser = parse_drs_file(filepath)
-
-#     print(f"\n{parser}")
-#     print("\nEvent Type Distribution:", dict(parser.get_event_type_distribution()))
-#     print("Tense Distribution:", dict(parser.get_tense_distribution()))
-#     print("Temporal Relations:", dict(parser.get_temporal_relation_types()))
-#     print(f"\nTemporal Density: {parser.get_temporal_density():.3f}")
-
-#     print("\n" + "=" * 60)
-#     print("FEATURE VECTOR:")
-#     print("=" * 60)
-#     features = parser.get_feature_vector()
-#     for key, value in sorted(features.items()):
-#         print(f"  {key:30s}: {value}")
+#========== Testing ==========
 
 if __name__ == "__main__":
-    DRS_DIR = os.path.join("NarrativeSimilarity", "drs_synth")
-    JSONL_PATH = os.path.join("NarrativeSimilarity", "dev", "synthetic", "synthetic_data_for_classification.jsonl")
+    import sys
 
-    check_dataset_properties(DRS_DIR, JSONL_PATH)
+    if len(sys.argv) < 2:
+        print("Usage: python drs_parser.py <drs_file>")
+        print("\nExample:")
+        print("  python drs_parser.py 0_anchor_drs.txt")
+        sys.exit(1)
+
+    filepath = sys.argv[1]
+
+    print(f"Parsing: {filepath}")
+    print("=" * 60)
+
+    parser = parse_drs_file(filepath)
+
+    print(f"\n{parser}")
+    print("\nEvent Type Distribution:", dict(parser.get_event_type_distribution()))
+    print("Tense Distribution:", dict(parser.get_tense_distribution()))
+    print("Temporal Relations:", dict(parser.get_temporal_relation_types()))
+    print(f"\nTemporal Density: {parser.get_temporal_density():.3f}")
+
+    print("\n" + "=" * 60)
+    print("FEATURE VECTOR:")
+    print("=" * 60)
+    features = parser.get_feature_vector()
+    for key, value in sorted(features.items()):
+        print(f"  {key:30s}: {value}")
+
+# if __name__ == "__main__":
+#     DRS_DIR = os.path.join("NarrativeSimilarity", "drs_synth")
+#     JSONL_PATH = os.path.join("NarrativeSimilarity", "dev", "synthetic", "synthetic_data_for_classification.jsonl")
+
+#     check_dataset_properties(DRS_DIR, JSONL_PATH)
