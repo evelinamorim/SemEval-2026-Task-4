@@ -28,7 +28,7 @@ import sys
 
 # Import model components
 try:
-    from five_component_encoder import (
+    from drsembedding.five.five_component_encoder import (
         FiveComponentConfig,
         FiveComponentModel,
         StoryDataProcessor,

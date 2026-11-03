@@ -22,8 +22,7 @@ import numpy as np
 # Import our modules
 try:
     from data_loader import DRSDataset, StoryGraph, Triplet
-    from feature_encoder import EventFeatureEncoder
-    from graph_encoder import GraphStructureEncoder, TemporalGraph
+    from drsembedding.shared.feature_encoder import EventFeatureEncoder
 except ImportError:
     pass
 
@@ -349,7 +348,7 @@ if __name__ == "__main__":
 
     # Load dataset
     from data_loader import DRSDataset
-    from feature_encoder import EventFeatureEncoder
+    from drsembedding.shared.feature_encoder import EventFeatureEncoder
 
     dataset = DRSDataset(jsonl_path)
     feature_encoder = EventFeatureEncoder(dataset=dataset)

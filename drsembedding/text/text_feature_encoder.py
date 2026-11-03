@@ -34,7 +34,7 @@ except ImportError:
 # Import our modules
 try:
     from data_loader import DRSDataset, StoryGraph, Triplet
-    from feature_encoder import EventFeatureEncoder
+    from drsembedding.shared.feature_encoder import EventFeatureEncoder
 except ImportError:
     pass
 

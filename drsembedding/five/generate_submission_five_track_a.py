@@ -9,11 +9,11 @@ import torch
 import argparse
 from pathlib import Path
 from tqdm import tqdm
-from five_component_encoder import (
+from drsembedding.five.five_component_encoder import (
     FiveComponentModel,
     FiveComponentConfig
 )
-from train_five import StoryDataProcessor
+from drsembedding.five.train_five import StoryDataProcessor
 from data_loader import DRSDataset
 
 

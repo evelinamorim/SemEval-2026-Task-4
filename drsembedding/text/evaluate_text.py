@@ -20,9 +20,9 @@ import json
 
 # Import our modules
 from data_loader import DRSDataset, Triplet
-from feature_encoder import EventFeatureEncoder
-from text_feature_encoder import TextEnhancedFeatureEncoder
-from simple_encoder import TripletSimilarityModel, compute_triplet_loss
+from drsembedding.shared.feature_encoder import EventFeatureEncoder
+from drsembedding.text.text_feature_encoder import TextEnhancedFeatureEncoder
+from drsembedding.shared.simple_encoder import TripletSimilarityModel, compute_triplet_loss
 
 
 class Evaluator:
