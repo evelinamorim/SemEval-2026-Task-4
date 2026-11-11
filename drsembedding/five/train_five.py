@@ -23,7 +23,7 @@ from pathlib import Path
 import json
 
 # Import our modules
-from data_loader import DRSDataset, Triplet
+from drsembedding.data_loader import DRSDataset, Triplet
 from drsembedding.five.five_component_encoder import (
     FiveComponentConfig,
     FiveComponentModel,

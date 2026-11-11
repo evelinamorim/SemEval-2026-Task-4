@@ -989,12 +989,14 @@ class FiveComponentModel(nn.Module):
             # Clone inference tensors (e.g., from frozen SBERT)
             if comp.is_inference():
                 comp = comp.clone()
+            weights = F.softmax(self.component_weights, dim=0)
             weighted_components.append(comp * weights[i])
 
         # Concatenate and fuse
         combined = torch.cat(weighted_components, dim=-1)
         output = self.fusion(combined)
 
+        output = F.normalize(output, p=2, dim=-1)
         return output, weights  # Return weights for analysis
 
 

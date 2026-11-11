@@ -140,12 +140,14 @@ class InferenceModel:
             # Clone inference tensors (e.g., from frozen SBERT)
             if comp.is_inference():
                 comp = comp.clone()
+            comp_norm = F.normalize(comp, p=2, dim=-1)
             weighted_components.append(comp * weights[i])
 
         # Concatenate and fuse
         combined = torch.cat(weighted_components, dim=-1)
         embedding = self.model.fusion(combined)
 
+        embedding = F.normalize(embedding, p=2, dim=-1)
         return embedding.cpu().numpy()
 
 
@@ -186,7 +188,7 @@ def load_model_and_config(checkpoint_dir: str, device: str = 'cpu') -> Inference
         text_model_name=config_dict['text_model_name'],
         num_verbnet_classes=config_dict['num_verbnet_classes'],
         num_predicates=config_dict['num_predicates'],
-        num_gnn_layers=config_dict.get('num_gnn_layers', 2),
+        num_gnn_layers=config_dict.get('num_gnn_layers', 1),
         use_temporal=config_dict['use_temporal'],
         use_logical=config_dict['use_logical'],
         use_participant=config_dict['use_participant'],
@@ -301,13 +303,22 @@ def save_embeddings_npy(embeddings: np.ndarray, output_path: str):
     return output_path
 
 
-def save_embeddings_jsonl(embeddings: np.ndarray, output_path: str):
-    """Save embeddings as JSONL file."""
+def save_embeddings_jsonl(
+    embeddings: np.ndarray, 
+    output_path: str,
+    preprocessed_data: List[Dict[str, Any]]
+):
+    """Save embeddings as JSONL file, preserving wikidata_id."""
     output_path = Path(output_path).with_suffix('.jsonl')
 
-    with open(output_path, 'w') as f:
-        for emb in embeddings:
-            json_obj = {"embeddings": emb.tolist()}
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for i, emb in enumerate(embeddings):
+            json_obj = {}
+            if i < len(preprocessed_data):
+                if 'wikidata_id' in preprocessed_data[i]:
+                    json_obj['wikidata_id'] = preprocessed_data[i]['wikidata_id']
+            
+            json_obj['embeddings'] = emb.tolist()
             f.write(json.dumps(json_obj) + '\n')
 
     print(f"\n✓ Saved embeddings to {output_path}")
@@ -462,7 +473,7 @@ Examples:
             saved_paths.append(str(path))
 
         if args.format in ['jsonl', 'both']:
-            path = save_embeddings_jsonl(embeddings, args.output)
+            path = save_embeddings_jsonl(embeddings, args.output, preprocessed_data)
             saved_paths.append(str(path))
 
         # Create submission ZIP if requested

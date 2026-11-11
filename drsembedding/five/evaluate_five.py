@@ -69,6 +69,9 @@ class FiveComponentEvaluator:
             self,
             dataset: DRSDataset,
             verbose: bool = True,
+            n_bootstraps: int = 1000,
+            ci: float = 0.95,
+            seed: int = 42,
     ) -> Dict:
         """Evaluate on entire dataset."""
         results = []
@@ -94,6 +97,10 @@ class FiveComponentEvaluator:
         confident_wrong = sum(1 for r in results if not r['correct'] and abs(r['logits']) > 0.1)
         uncertain = sum(1 for r in results if abs(r['logits']) <= 0.1)
 
+        bootstrap_ci = self.bootstrap_triplet_metrics(
+            results, n_bootstraps=n_bootstraps, ci=ci, seed=seed
+        )
+
         return {
             'accuracy': accuracy,
             'correct': correct_count,
@@ -102,10 +109,11 @@ class FiveComponentEvaluator:
             'confident_correct': confident_correct,
             'confident_wrong': confident_wrong,
             'uncertain': uncertain,
-            'mean_logits': np.mean(logits),
-            'std_logits': np.std(logits),
+            'mean_logits': float(np.mean(logits)) if logits else 0.0,
+            'std_logits': float(np.std(logits)) if logits else 0.0,
+            'bootstrap': bootstrap_ci,
         }
-
+    
     @torch.no_grad()
     def get_component_embeddings(self, triplet: Triplet) -> Dict[str, Dict[str, torch.Tensor]]:
         """
@@ -198,6 +206,57 @@ class FiveComponentEvaluator:
 
         return analysis
 
+    def bootstrap_triplet_metrics(
+            self,
+            results: List[Dict],
+            n_bootstraps: int = 1000,
+            ci: float = 0.95,
+            seed: int = 42,
+    ) -> Dict[str, Dict[str, float]]:
+        """
+        Perform bootstrap with replacement on the evaluated triplets to obtain confidence
+        intervals for accuracy, logits (sim_a - sim_b), and similarities.
+        """
+        n = len(results)
+        if n == 0:
+            return {}
+
+        rng = np.random.default_rng(seed)
+        
+        correct_arr = np.array([1.0 if r['correct'] else 0.0 for r in results])
+        logits_arr = np.array([r['logits'] for r in results])
+
+        signed_margin_arr = np.array([
+            r['logits'] if r['label_a_closer'] else -r['logits'] for r in results
+        ])
+
+        # Index Matrix of replacement: [n_bootstraps, n_triplets]
+        boot_indices = rng.integers(0, n, size=(n_bootstraps, n))
+
+        boot_acc = correct_arr[boot_indices].mean(axis=1)
+        boot_logits = logits_arr[boot_indices].mean(axis=1)
+        boot_margin = signed_margin_arr[boot_indices].mean(axis=1)
+
+        alpha = (1.0 - ci) / 2.0
+        lower_p = alpha * 100
+        upper_p = (1.0 - alpha) * 100
+
+        def _summarize(arr: np.ndarray) -> Dict[str, float]:
+            return {
+                'mean': float(np.mean(arr)),
+                'std_err': float(np.std(arr, ddof=1)),
+                'ci_lower': float(np.percentile(arr, lower_p)),
+                'ci_upper': float(np.percentile(arr, upper_p)),
+            }
+
+        return {
+            'accuracy': _summarize(boot_acc),
+            'logits': _summarize(boot_logits),
+            'signed_margin': _summarize(boot_margin),
+            'n_bootstraps': n_bootstraps,
+            'ci_level': ci,
+        }
+
 
 def load_model_and_processor(
         checkpoint_path: str,
@@ -267,6 +326,10 @@ def main():
     parser.add_argument('--show_errors', action='store_true', help='Show misclassified examples')
     parser.add_argument('--num_errors', type=int, default=10, help='Number of errors to show')
     parser.add_argument('--component_analysis', action='store_true', help='Show per-component analysis')
+    parser.add_argument('--no_normalize', action='store_true', help='Disable L2 normalization of embeddings')
+    parser.add_argument('--n_bootstraps', type=int, default=1000, help='Number of bootstrap resamples')
+    parser.add_argument('--ci', type=float, default=0.95, help='Confidence interval level (default: 0.95)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for bootstrap')
 
     args = parser.parse_args()
 
@@ -302,7 +365,14 @@ def main():
     print("RUNNING EVALUATION")
     print("-" * 40)
 
-    metrics = evaluator.evaluate_dataset(test_dataset, verbose=True)
+    metrics = evaluator.evaluate_dataset(
+        test_dataset,
+        verbose=True,
+        normalize=not args.no_normalize,
+        n_bootstraps=args.n_bootstraps,
+        ci=args.ci,
+        seed=args.seed,
+    )
 
     # Print results
     print("\n" + "-" * 40)
@@ -318,6 +388,15 @@ def main():
 
     print(f"\nAccuracy: {metrics['accuracy'] * 100:.2f}%")
     print(f"Correct: {metrics['correct']} / {metrics['total']}")
+
+    if 'bootstrap' in metrics and metrics['bootstrap']:
+        boot = metrics['bootstrap']
+        ci_pct = int(args.ci * 100)
+        print(f"\nBootstrap ({boot['n_bootstraps']} resamples, {ci_pct}% CI):")
+        print(f"  Accuracy CI:      [{boot['accuracy']['ci_lower'] * 100:.2f}%, {boot['accuracy']['ci_upper'] * 100:.2f}%] "
+              f"(SE: ±{boot['accuracy']['std_err'] * 100:.2f}%)")
+        print(f"  Signed Margin CI: [{boot['signed_margin']['ci_lower']:.4f}, {boot['signed_margin']['ci_upper']:.4f}] "
+              f"(Mean: {boot['signed_margin']['mean']:.4f})")
 
     print(f"\nConfidence analysis:")
     print(f"  Confident & correct: {metrics['confident_correct']}")
@@ -389,6 +468,7 @@ def main():
             'uncertain': metrics['uncertain'],
             'mean_logits': metrics['mean_logits'],
             'std_logits': metrics['std_logits'],
+            'bootstrap': metrics.get('bootstrap', {}),  # <--- AÑADIR ESTA LÍNEA
             'checkpoint': args.checkpoint,
             'test_data': args.test_data,
             'config': config_dict,
