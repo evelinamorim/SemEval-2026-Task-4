@@ -1,29 +1,31 @@
 """
-Evaluate Track B Embeddings on Final Exam Triplet Ground Truth.
+Evaluate Track B Embeddings on Final Exam Triplet Ground Truth via Exact Text Matching.
 
-This script maps story embeddings to their corresponding wikidata_id from the
-preprocessed Track B file, computes cosine similarities for each triplet in the
-answers file (anchor vs. text_a and text_b), and calculates final accuracy.
+Follows the official competition logic (join_labels.py):
+1. Generates/loads embeddings in the exact order of the 849 stories.
+2. Associates each embedding with its full story text.
+3. Matches each triplet slot (anchor_text, text_a, text_b) by exact text to its embedding.
 
 Usage:
-    # Option A: Using pre-generated embeddings (.npy or .jsonl) from generate_embeddings_drs.py
+    # Option A: Using pre-generated embeddings (.npy or .jsonl)
     python evaluate_final_exam.py \
-        --preprocessed track_b_preprocessed.jsonl \
-        --answers test_answers.jsonl \
+        --preprocessed NarrativeSimilarity/test/track_b_preprocessed.jsonl \
+        --stories NarrativeSimilarity/test/test_track_b.jsonl \
+        --answers NarrativeSimilarity/test/test_track_b_labels.jsonl \
         --embeddings track_b_embeddings.npy \
         --output final_exam_results.json
 
     # Option B: Generating embeddings on the fly using a model checkpoint
     python evaluate_final_exam.py \
-        --preprocessed track_b_preprocessed.jsonl \
-        --answers test_answers.jsonl \
+        --preprocessed NarrativeSimilarity/test/track_b_preprocessed.jsonl \
+        --stories NarrativeSimilarity/test/test_track_b.jsonl \
+        --answers NarrativeSimilarity/test/test_track_b_labels.jsonl \
         --checkpoint ./checkpoints_five \
         --output final_exam_results.json
 """
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
@@ -31,8 +33,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
-# Import functions directly from your fixed generate_embeddings_drs.py
-from generate_embeddings_drs import (
+from drsembedding.five.generate_embeddings_drs import (
     load_preprocessed_data,
     load_model_and_config,
     generate_embeddings,
@@ -56,7 +57,7 @@ def load_json_or_jsonl(file_path: str) -> List[Dict[str, Any]]:
 
 
 def load_precomputed_embeddings(embeddings_path: str) -> np.ndarray:
-    """Load precomputed embeddings from a .npy or .jsonl file."""
+    """Load precomputed embeddings from a .npy or .jsonl file in exact order."""
     path = Path(embeddings_path)
     if not path.exists():
         raise FileNotFoundError(f"Embeddings file not found: {path}")
@@ -76,39 +77,52 @@ def load_precomputed_embeddings(embeddings_path: str) -> np.ndarray:
         raise ValueError(f"Unsupported embedding file format: {path.suffix}. Use .npy or .jsonl")
 
 
-def build_wikidata_embedding_map(
-    preprocessed_stories: List[Dict[str, Any]],
+def build_text_embedding_map(
+    stories_source: List[Dict[str, Any]],
     embeddings: np.ndarray,
 ) -> Dict[str, torch.Tensor]:
     """
-    Associate each story's embedding with its wikidata_id.
+    Step 2: Associate each generated embedding (in order) with its full story text.
     """
-    if len(preprocessed_stories) != len(embeddings):
+    if len(stories_source) != len(embeddings):
         raise ValueError(
-            f"Length mismatch: {len(preprocessed_stories)} preprocessed stories "
+            f"Length mismatch: {len(stories_source)} stories "
             f"vs {len(embeddings)} embeddings."
         )
 
-    emb_map: Dict[str, torch.Tensor] = {}
-    missing_id_count = 0
+    text_to_emb: Dict[str, torch.Tensor] = {}
+    missing_text_count = 0
 
-    for item, emb_vec in zip(preprocessed_stories, embeddings):
-        wiki_id = item.get('wikidata_id')
-        if wiki_id:
-            emb_map[wiki_id] = torch.tensor(emb_vec, dtype=torch.float32)
+    for idx, (item, emb_vec) in enumerate(zip(stories_source, embeddings)):
+        text = item.get('text')
+        if text is not None and text != "":
+            # Map both exact string and stripped string for safety
+            tensor_emb = torch.tensor(emb_vec, dtype=torch.float32)
+            text_to_emb[text] = tensor_emb
+            text_to_emb[text.strip()] = tensor_emb
         else:
-            missing_id_count += 1
+            missing_text_count += 1
 
-    if missing_id_count > 0:
-        print(f"⚠ Warning: {missing_id_count} stories did not have a 'wikidata_id' field.")
+    if missing_text_count > 0:
+        print(f"⚠ Warning: {missing_text_count} stories did not have a valid 'text' field.")
 
-    if len(emb_map) == 0:
+    if len(text_to_emb) == 0:
         raise RuntimeError(
-            "No 'wikidata_id' fields were found in the preprocessed file! "
-            "Please re-run preprocess_trackb.py with the updated script."
+            "No 'text' fields were found in the stories file! "
+            "Pass the raw Track B stories JSONL via --stories or ensure 'text' is in --preprocessed."
         )
 
-    return emb_map
+    return text_to_emb
+
+
+def lookup_embedding_by_text(text: str, emb_map: Dict[str, torch.Tensor]) -> Optional[torch.Tensor]:
+    """Find embedding by exact text match (with fallback to stripped text)."""
+    if text in emb_map:
+        return emb_map[text]
+    stripped = text.strip()
+    if stripped in emb_map:
+        return emb_map[stripped]
+    return None
 
 
 def evaluate_triplets(
@@ -116,14 +130,13 @@ def evaluate_triplets(
     emb_map: Dict[str, torch.Tensor],
 ) -> Dict[str, Any]:
     """
-    Evaluate triplet predictions by comparing cosine similarity between
-    (anchor, text_a) and (anchor, text_b) using wikidata_id lookups.
+    Step 3: Match each triplet slot (anchor_text, text_a, text_b) by exact text
+    to its embedding and evaluate cosine similarity.
     """
     results = []
     correct_count = 0
     skipped_count = 0
 
-    # Breakdown by annotation categories if present in the test answers
     sub_metrics = {
         'abstract_theme': {'correct': 0, 'total': 0},
         'course_of_actions': {'correct': 0, 'total': 0},
@@ -132,24 +145,30 @@ def evaluate_triplets(
 
     for idx, item in enumerate(answers_data):
         try:
-            anchor_id = item['story_details_anchor']['wikidata_id']
-            a_id = item['story_details_a']['wikidata_id']
-            b_id = item['story_details_b']['wikidata_id']
+            anchor_text = item['anchor_text']
+            text_a = item['text_a']
+            text_b = item['text_b']
         except KeyError as e:
-            print(f"  [Row {idx}] Skipping triplet due to missing key: {e}")
+            print(f"  [Row {idx}] Skipping triplet due to missing text key: {e}")
             skipped_count += 1
             continue
 
-        # Check that all 3 embeddings exist in our map
-        missing_ids = [wid for wid in (anchor_id, a_id, b_id) if wid not in emb_map]
-        if missing_ids:
-            print(f"  [Row {idx}] Skipping triplet; wikidata_id not found in lookup: {missing_ids}")
+        anchor_emb = lookup_embedding_by_text(anchor_text, emb_map)
+        a_emb = lookup_embedding_by_text(text_a, emb_map)
+        b_emb = lookup_embedding_by_text(text_b, emb_map)
+
+        missing_slots = []
+        if anchor_emb is None:
+            missing_slots.append('anchor_text')
+        if a_emb is None:
+            missing_slots.append('text_a')
+        if b_emb is None:
+            missing_slots.append('text_b')
+
+        if missing_slots:
+            print(f"  [Row {idx}] Skipping triplet; exact text not found in bank for: {missing_slots}")
             skipped_count += 1
             continue
-
-        anchor_emb = emb_map[anchor_id]
-        a_emb = emb_map[a_id]
-        b_emb = emb_map[b_id]
 
         # Compute cosine similarity (higher means closer to anchor)
         sim_a = F.cosine_similarity(anchor_emb.unsqueeze(0), a_emb.unsqueeze(0)).item()
@@ -163,7 +182,7 @@ def evaluate_triplets(
         if is_correct:
             correct_count += 1
 
-        # Track sub-aspect agreement (majority vote of boolean lists if available)
+        # Track sub-aspect agreement if available
         for aspect in sub_metrics:
             if aspect in item and isinstance(item[aspect], list) and len(item[aspect]) > 0:
                 valid_votes = [v for v in item[aspect] if v is not None]
@@ -175,9 +194,9 @@ def evaluate_triplets(
 
         results.append({
             'idx': idx,
-            'anchor_wikidata_id': anchor_id,
-            'a_wikidata_id': a_id,
-            'b_wikidata_id': b_id,
+            'anchor_preview': anchor_text[:60].replace('\n', ' ') + '...',
+            'a_preview': text_a[:60].replace('\n', ' ') + '...',
+            'b_preview': text_b[:60].replace('\n', ' ') + '...',
             'sim_a': sim_a,
             'sim_b': sim_b,
             'logits': logits,
@@ -216,19 +235,26 @@ def evaluate_triplets(
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Evaluate Track B embeddings against final exam triplet answers'
+        description='Evaluate Track B embeddings against final exam triplet answers using exact text matching'
     )
     parser.add_argument(
         '--preprocessed',
         type=str,
         required=True,
-        help='Path to preprocessed stories JSONL (must contain wikidata_id)',
+        help='Path to preprocessed stories JSONL (in the exact order of Track B stories)',
+    )
+    parser.add_argument(
+        '--stories',
+        type=str,
+        default=None,
+        help='Optional path to raw Track B plain stories JSONL (e.g., test_track_b.jsonl). '
+             'If provided, texts are read from here in order; otherwise read from --preprocessed.',
     )
     parser.add_argument(
         '--answers',
         type=str,
         required=True,
-        help='Path to test answers JSON/JSONL containing triplets and ground truth labels',
+        help='Path to triplets JSON/JSONL containing anchor_text, text_a, text_b, and text_a_is_closer',
     )
     parser.add_argument(
         '--embeddings',
@@ -274,15 +300,22 @@ def main():
     device = ('cuda' if torch.cuda.is_available() else 'cpu') if args.device == 'auto' else args.device
 
     print("\n" + "=" * 70)
-    print("FINAL EXAM EVALUATION (TRACK B EMBEDDINGS -> TRIPLET ANSWERS)")
+    print("FINAL EXAM EVALUATION (EXACT TEXT MATCHING)")
     print("=" * 70)
 
-    # 1. Load preprocessed stories (with wikidata_id)
+    # 1. Load preprocessed stories (and raw stories if provided)
     print(f"Loading preprocessed stories from: {args.preprocessed}")
     preprocessed_stories = load_preprocessed_data(args.preprocessed)
-    print(f"✓ Loaded {len(preprocessed_stories)} stories")
+    print(f"✓ Loaded {len(preprocessed_stories)} preprocessed stories")
 
-    # 2. Load or generate embeddings
+    if args.stories is not None:
+        print(f"Loading plain story texts from: {args.stories}")
+        stories_for_text = load_json_or_jsonl(args.stories)
+        print(f"✓ Loaded {len(stories_for_text)} plain story texts")
+    else:
+        stories_for_text = preprocessed_stories
+
+    # 2. Step 1: Generate or load embeddings in exact story order
     if args.embeddings is not None:
         print(f"Loading precomputed embeddings from: {args.embeddings}")
         embeddings = load_precomputed_embeddings(args.embeddings)
@@ -295,12 +328,12 @@ def main():
             np.save(out_npy, embeddings)
             print(f"✓ Saved generated embeddings to: {out_npy}")
 
-    # 3. Map wikidata_id -> embedding tensor
-    emb_map = build_wikidata_embedding_map(preprocessed_stories, embeddings)
-    print(f"✓ Indexed {len(emb_map)} unique wikidata_id embeddings")
+    # 3. Step 2: Associate embeddings with full story texts
+    emb_map = build_text_embedding_map(stories_for_text, embeddings)
+    print(f"✓ Indexed embeddings for {len(stories_for_text)} stories by exact text")
 
-    # 4. Load test answers and evaluate
-    print(f"\nLoading test answers from: {args.answers}")
+    # 4. Step 3: Load test triplets and match each element by exact text
+    print(f"\nLoading test triplets from: {args.answers}")
     answers_data = load_json_or_jsonl(args.answers)
     print(f"✓ Loaded {len(answers_data)} test triplets")
 
@@ -330,17 +363,17 @@ def main():
         print("-" * 70)
         for err in errors[:10]:
             print(
-                f"  Triplet {err['idx']:4d} | Anchor: {err['anchor_wikidata_id']} | "
-                f"Sim A ({err['a_wikidata_id']}): {err['sim_a']:.4f} | "
-                f"Sim B ({err['b_wikidata_id']}): {err['sim_b']:.4f} | "
+                f"  Triplet {err['idx']:4d} | "
+                f"Sim A: {err['sim_a']:.4f} | Sim B: {err['sim_b']:.4f} | "
                 f"Pred: {'A' if err['pred_a_is_closer'] else 'B'} "
-                f"(Actual: {'A' if err['label_a_is_closer'] else 'B'})"
+                f"(Actual: {'A' if err['label_a_is_closer'] else 'B'})\n"
+                f"    Anchor: {err['anchor_preview']}"
             )
 
     # 6. Save output JSON
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(metrics, f, indent=2, ensure_ascii=False)
         print(f"\n✓ Detailed results saved to: {args.output}")
 
     print("=" * 70)

@@ -30,7 +30,7 @@ from typing import Dict, List, Optional, Any
 import sys
 
 # Import the DRS extractor from preprocessing.py
-from preprocessing import DRSGraphExtractor, DRSGraph
+from drsembedding.preprocessing import DRSGraphExtractor, DRSGraph
 
 
 def load_test_stories(jsonl_path: str) -> List[Dict[str, Any]]:

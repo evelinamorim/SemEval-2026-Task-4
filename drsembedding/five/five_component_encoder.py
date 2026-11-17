@@ -35,7 +35,7 @@ except ImportError:
     warnings.warn("sentence-transformers not installed. Component 5 will be disabled.")
 
 # Import our modules
-from data_loader import DRSDataset, StoryGraph, Triplet
+from drsembedding.data_loader import DRSDataset, StoryGraph, Triplet
 
 
 # ============================================================

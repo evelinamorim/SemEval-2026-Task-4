@@ -1,0 +1,18 @@
+{
+  "temporal_dim": 64,
+  "logical_dim": 64,
+  "participant_dim": 64,
+  "semantic_dim": 64,
+  "text_dim": 384,
+  "hidden_dim": 128,
+  "output_dim": 128,
+  "dropout": 0.1,
+  "text_model_name": "all-MiniLM-L6-v2",
+  "num_verbnet_classes": 2690,
+  "num_predicates": 119,
+  "use_temporal": true,
+  "use_logical": true,
+  "use_participant": true,
+  "use_semantic": true,
+  "use_text": true
+}

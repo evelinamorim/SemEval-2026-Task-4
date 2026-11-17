@@ -35,7 +35,7 @@ try:
         FiveComponentModel,
         StoryDataProcessor,
     )
-    from data_loader import StoryGraph
+    from drsembedding.data_loader import StoryGraph
 except ImportError as e:
     print(f"Error: Could not import required modules: {e}")
     print("Make sure five_component_encoder.py and data_loader.py are in the same directory")
@@ -308,21 +308,21 @@ def save_embeddings_jsonl(
     output_path: str,
     preprocessed_data: List[Dict[str, Any]]
 ):
-    """Save embeddings as JSONL file, preserving wikidata_id."""
+    """Save embeddings as JSONL file in exact story order, preserving full text."""
     output_path = Path(output_path).with_suffix('.jsonl')
 
     with open(output_path, 'w', encoding='utf-8') as f:
         for i, emb in enumerate(embeddings):
             json_obj = {}
             if i < len(preprocessed_data):
-                if 'wikidata_id' in preprocessed_data[i]:
-                    json_obj['wikidata_id'] = preprocessed_data[i]['wikidata_id']
+                if 'text' in preprocessed_data[i]:
+                    json_obj['text'] = preprocessed_data[i]['text']
             
             json_obj['embeddings'] = emb.tolist()
-            f.write(json.dumps(json_obj) + '\n')
+            f.write(json.dumps(json_obj, ensure_ascii=False) + '\n')
 
     print(f"\n✓ Saved embeddings to {output_path}")
-    print(f"  Format: JSONL")
+    print(f"  Format: JSONL (with exact story order and full text)")
     return output_path
 
 
