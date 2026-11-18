@@ -7,7 +7,7 @@ Track B provides individual stories (not triplets). This script:
 3. Outputs a preprocessed JSONL ready for the embedding model and final evaluation.
 
 Input Requirements:
-    - test_json: A JSON/JSONL file where each entry contains at least 'text' and 'wikidata_id'.
+    - test_json: A JSON/JSONL file where each entry contains at least 'text'.
     - drs_dir: A folder containing the DRS text files for each story, typically 
                named as {idx}_drs.txt, {idx}.txt, or story_{idx}_drs.txt.
 
@@ -61,12 +61,14 @@ def find_drs_file(drs_dir: Path, idx: int) -> Optional[Path]:
     Find the DRS file for a given story index.
 
     Tries multiple naming conventions:
+    - {idx}_text_drs.txt
     - {idx}_drs.txt
     - {idx}.txt
     - story_{idx}_drs.txt
     - {idx}_anchor_drs.txt (for compatibility)
     """
     patterns = [
+        f"{idx}_text_drs.txt",
         f"{idx}_drs.txt",
         f"{idx}.txt",
         f"story_{idx}_drs.txt",
