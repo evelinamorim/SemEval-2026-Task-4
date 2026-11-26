@@ -76,6 +76,9 @@ class FiveComponentConfig:
     use_participant: bool = True
     use_semantic: bool = True
     use_text: bool = True
+    # Cosine similarity logit temperature scaling: logits = (sim_a - sim_b) / temperature
+    temperature: float = 1.0
+    learnable_temperature: bool = False
 
     def total_component_dim(self) -> int:
         """Calculate total dimension from enabled components."""
@@ -906,6 +909,21 @@ class FiveComponentModel(nn.Module):
             nn.Linear(config.hidden_dim, config.output_dim),
         )
 
+        # Temperature scaling (fixed by default; learnable only when requested)
+        if config.temperature <= 0:
+            raise ValueError(f"temperature must be > 0, got {config.temperature}")
+
+        self.learnable_temperature = config.learnable_temperature
+        if self.learnable_temperature:
+            self.log_temperature = nn.Parameter(
+                torch.tensor(float(np.log(config.temperature)), dtype=torch.float32)
+            )
+        else:
+            self.register_buffer(
+                'fixed_temperature',
+                torch.tensor(float(config.temperature), dtype=torch.float32),
+            )
+
         print(f"  Total input dim: {total_dim}")
 
         config.text_dim = original_text_dim
@@ -999,6 +1017,11 @@ class FiveComponentModel(nn.Module):
         output = F.normalize(output, p=2, dim=-1)
         return output, weights  # Return weights for analysis
 
+    def get_temperature(self) -> torch.Tensor:
+        """Return strictly positive temperature tensor."""
+        if self.learnable_temperature:
+            return torch.clamp(self.log_temperature.exp(), min=0.02, max=2.0)
+        return self.fixed_temperature
 
     def forward(
         self,
@@ -1021,8 +1044,8 @@ class FiveComponentModel(nn.Module):
         sim_a = F.cosine_similarity(anchor_emb.unsqueeze(0), a_emb.unsqueeze(0))
         sim_b = F.cosine_similarity(anchor_emb.unsqueeze(0), b_emb.unsqueeze(0))
 
-        #temperature = self.temperature
-        logits = (sim_a - sim_b)
+        temperature = self.get_temperature()
+        logits = (sim_a - sim_b) / temperature
 
         return {
             'anchor_emb': anchor_emb,
@@ -1030,6 +1053,7 @@ class FiveComponentModel(nn.Module):
             'b_emb': b_emb,
             'sim_a': sim_a,
             'sim_b': sim_b,
+            'temperature': temperature.detach(),
             'logits': logits,
             'anchor_attention': anchor_attn,
             'a_attention': a_attn,

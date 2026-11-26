@@ -1,0 +1,1054 @@
+"""
+Ablation Study Script for Five-Component DRS Encoder
+
+Systematically trains and evaluates valid subsets of the five components under the
+architectural dependency constraint:
+    `semantic` requires both `temporal` and `participant`.
+
+This yields 19 unique valid configurations across 5 levels (with zero duplicates):
+    - single   (4): T, L, P, Txt
+    - pairs    (6): T+L, T+P, T+Txt, L+P, L+Txt, P+Txt
+    - triplets (5): T+L+P, T+L+Txt, T+P+Txt, L+P+Txt, T+P+S
+    - quads    (3): T+L+P+Txt, T+L+P+S, T+P+S+Txt
+    - full     (1): T+L+P+S+Txt (all_five)
+
+Generates three complementary analytical views:
+    1. 4x4 Accuracy & Synergy matrices across independent base components (T, L, P, Txt)
+       plus pairwise prediction complementarity among individual models.
+    2. Controlled Marginal Gain of Semantic (Delta-S) across its 4 exact twin comparisons.
+    3. Leave-One-Out (LOO) impact relative to the full 5-component model.
+
+Usage:
+    # Run all 19 valid configurations
+    python -m drsembedding.five.ablation_study ../data/preprocessed_synth.jsonl \
+        --val_data ../data/preprocessed_val.jsonl \
+        --test_data ../data/preprocessed_dev.jsonl \
+        --modes all \
+        --temperature 0.1 \
+        --epochs 50 \
+        --output_dir ./ablation_results
+
+    # Run only specific levels (e.g., singles + pairs, or triplets + quads + full)
+    python -m drsembedding.five.ablation_study ../data/preprocessed_synth.jsonl \
+        --test_data ../data/preprocessed_dev.jsonl \
+        --modes single pairs \
+        --seeds 42 123 456 \
+        --output_dir ./ablation_single_pairs
+"""
+
+import argparse
+import csv
+import itertools
+import json
+import random
+import time
+from pathlib import Path
+from typing import Dict, List, Optional, Sequence, Tuple
+
+import numpy as np
+import torch
+import torch.nn.functional as F
+import torch.optim as optim
+
+from drsembedding.data_loader import DRSDataset
+from drsembedding.five.five_component_encoder import (
+    FiveComponentConfig,
+    FiveComponentModel,
+    StoryDataProcessor,
+)
+from drsembedding.five.train_five import (
+    FiveComponentTrainer,
+    FiveTripletDataset,
+    create_datasets,
+)
+
+# Canonical ordering prevents duplicate subsets (e.g., text+logical vs logical+text)
+COMPONENTS = ['temporal', 'logical', 'participant', 'semantic', 'text']
+BASE_COMPONENTS = ['temporal', 'logical', 'participant', 'text']
+
+MODE_TO_SIZE = {
+    'single': 1,
+    'pairs': 2,
+    'triplets': 3,
+    'quads': 4,
+    'full': 5,
+}
+
+
+def set_seed(seed: int) -> None:
+    """Fix all RNG seeds for reproducible comparisons across configurations."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def is_valid_subset(components: Sequence[str]) -> bool:
+    """
+    Enforce architectural dependency:
+    SemanticRoleEncoder consumes contextualized node features from both
+    TemporalGraphEncoder and ParticipantGraphEncoder.
+    """
+    if 'semantic' in components:
+        return ('temporal' in components) and ('participant' in components)
+    return True
+
+
+def canonical_name(components: Sequence[str]) -> str:
+    """Produce a deterministic experiment name from any subset of components."""
+    ordered = [c for c in COMPONENTS if c in components]
+    if len(ordered) == 1:
+        return f"only_{ordered[0]}"
+    if len(ordered) == len(COMPONENTS):
+        return "all_five"
+    return "+".join(ordered)
+
+
+def build_experiment_grid(modes: Sequence[str]) -> List[Tuple[str, List[str]]]:
+    """
+    Build the deduplicated list of valid (experiment_name, active_components) tuples
+    for the requested ablation levels.
+    """
+    if 'all' in modes:
+        selected_modes = ['single', 'pairs', 'triplets', 'quads', 'full']
+    else:
+        # Preserve canonical level order and deduplicate requested modes
+        selected_modes = [m for m in MODE_TO_SIZE if m in modes]
+
+    experiments: List[Tuple[str, List[str]]] = []
+    seen_names = set()
+
+    for mode in selected_modes:
+        k = MODE_TO_SIZE[mode]
+        for combo in itertools.combinations(COMPONENTS, k):
+            if not is_valid_subset(combo):
+                continue
+            name = canonical_name(combo)
+            if name not in seen_names:
+                seen_names.add(name)
+                experiments.append((name, list(combo)))
+
+    return experiments
+
+
+def precompute_text_embeddings(
+    datasets: Sequence[Optional[FiveTripletDataset]],
+    text_model,
+    device: str,
+    batch_size: int = 64,
+) -> None:
+    """
+    Encode all unique story texts once using the frozen SentenceTransformer and attach
+    them as `story_data['text_embedding']` to avoid redundant forward passes.
+    """
+    if text_model is None:
+        return
+
+    unique_texts = set()
+    for ds in datasets:
+        if ds is None:
+            continue
+        for item in ds.processed_data:
+            for slot in ('anchor', 'story_a', 'story_b'):
+                unique_texts.add(item[slot]['text'])
+
+    unique_texts_list = sorted(unique_texts)
+    print(f"\nPrecomputing frozen SBERT embeddings for {len(unique_texts_list)} unique texts...")
+    start_time = time.time()
+
+    with torch.no_grad():
+        all_embs = text_model.encode(
+            unique_texts_list,
+            batch_size=batch_size,
+            convert_to_tensor=True,
+            show_progress_bar=False,
+        )
+
+    # .clone().detach() exits inference_mode so tensors are safe inside autograd graphs
+    text_to_emb = {
+        txt: all_embs[i].clone().detach().to(device)
+        for i, txt in enumerate(unique_texts_list)
+    }
+
+    for ds in datasets:
+        if ds is None:
+            continue
+        for item in ds.processed_data:
+            for slot in ('anchor', 'story_a', 'story_b'):
+                item[slot]['text_embedding'] = text_to_emb[item[slot]['text']]
+
+    print(f"✓ Precomputed text embeddings in {time.time() - start_time:.1f}s")
+
+
+@torch.no_grad()
+def evaluate_preprocessed_dataset(
+    model: FiveComponentModel,
+    dataset: FiveTripletDataset,
+    device: str,
+    n_bootstraps: int = 1000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> Dict:
+    """Evaluate a trained model on a pre-processed FiveTripletDataset with bootstrap CIs."""
+    model.eval()
+    total_loss = 0.0
+    correct_count = 0
+    per_example = []
+
+    for item in dataset.processed_data:
+        output = model(item['anchor'], item['story_a'], item['story_b'])
+        label_val = float(item['label'])
+        label_tensor = torch.tensor([label_val], device=device)
+
+        loss = F.binary_cross_entropy_with_logits(output['logits'], label_tensor).item()
+        logit = output['logits'].item()
+        sim_a = output['sim_a'].item()
+        sim_b = output['sim_b'].item()
+        cosine_diff = sim_a - sim_b
+
+        pred_a_closer = cosine_diff > 0.0
+        label_a_closer = bool(item['label'])
+        is_correct = (pred_a_closer == label_a_closer)
+
+        total_loss += loss
+        if is_correct:
+            correct_count += 1
+
+        per_example.append({
+            'idx': item['idx'],
+            'logits': logit,
+            'cosine_diff': cosine_diff,
+            'sim_a': sim_a,
+            'sim_b': sim_b,
+            'pred_a_closer': pred_a_closer,
+            'label_a_closer': label_a_closer,
+            'correct': is_correct,
+        })
+
+    n = len(per_example)
+    if n == 0:
+        return {
+            'accuracy': 0.0,
+            'loss': 0.0,
+            'correct': 0,
+            'total': 0,
+            'ci_lower': 0.0,
+            'ci_upper': 0.0,
+            'std_err': 0.0,
+            'signed_cosine_margin_mean': 0.0,
+            'per_example': [],
+        }
+
+    accuracy = correct_count / n
+    avg_loss = total_loss / n
+
+    # Bootstrap confidence intervals using raw cosine margin (temperature-invariant)
+    rng = np.random.default_rng(seed)
+    correct_arr = np.array([1.0 if r['correct'] else 0.0 for r in per_example])
+    signed_margin_arr = np.array([
+        r['cosine_diff'] if r['label_a_closer'] else -r['cosine_diff'] for r in per_example
+    ])
+
+    boot_idx = rng.integers(0, n, size=(n_bootstraps, n))
+    boot_acc = correct_arr[boot_idx].mean(axis=1)
+    boot_margin = signed_margin_arr[boot_idx].mean(axis=1)
+
+    alpha = (1.0 - ci) / 2.0
+    lo, hi = alpha * 100.0, (1.0 - alpha) * 100.0
+
+    return {
+        'accuracy': accuracy,
+        'loss': avg_loss,
+        'correct': correct_count,
+        'total': n,
+        'ci_lower': float(np.percentile(boot_acc, lo)),
+        'ci_upper': float(np.percentile(boot_acc, hi)),
+        'std_err': float(np.std(boot_acc, ddof=1)),
+        'signed_cosine_margin_mean': float(np.mean(boot_margin)),
+        'per_example': per_example,
+    }
+
+
+def run_single_experiment(
+    exp_name: str,
+    active_components: List[str],
+    train_dataset: FiveTripletDataset,
+    val_dataset: FiveTripletDataset,
+    test_dataset: Optional[FiveTripletDataset],
+    processor: StoryDataProcessor,
+    args: argparse.Namespace,
+    seed: int,
+    device: str,
+    run_dir: Path,
+) -> Dict:
+    """Train, checkpoint, and evaluate a single ablation configuration."""
+    set_seed(seed)
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    text_dim = (
+        processor.text_model.get_sentence_embedding_dimension()
+        if processor.text_model is not None
+        else 384
+    )
+
+    config = FiveComponentConfig(
+        temporal_dim=args.temporal_dim,
+        logical_dim=args.logical_dim,
+        participant_dim=args.participant_dim,
+        semantic_dim=args.semantic_dim,
+        text_dim=text_dim,
+        hidden_dim=args.hidden_dim,
+        output_dim=args.output_dim,
+        dropout=args.dropout,
+        text_model_name=args.text_model,
+        num_verbnet_classes=len(processor.verbnet_vocab),
+        num_predicates=len(processor.predicate_vocab),
+        use_temporal=('temporal' in active_components),
+        use_logical=('logical' in active_components),
+        use_participant=('participant' in active_components),
+        use_semantic=('semantic' in active_components),
+        use_text=('text' in active_components),
+        temperature=args.temperature,
+        learnable_temperature=args.learnable_temperature,
+    )
+
+    model = FiveComponentModel(
+        config,
+        device=device,
+        shared_text_model=processor.text_model,
+    ).to(device)
+
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    optimizer = optim.AdamW(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+    )
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5
+    )
+
+    trainer = FiveComponentTrainer(
+        model=model,
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        optimizer=optimizer,
+        scheduler=scheduler,
+        device=device,
+        checkpoint_dir=str(run_dir),
+    )
+
+    start_time = time.time()
+    history = trainer.train(
+        num_epochs=args.epochs,
+        patience=args.patience,
+        verbose=args.verbose_epochs,
+    )
+    train_time = time.time() - start_time
+
+    # Reload best validation checkpoint for final evaluation & weight inspection
+    best_ckpt_path = run_dir / 'best_model.pt'
+    if best_ckpt_path.exists():
+        checkpoint = torch.load(best_ckpt_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Save artifacts compatible with evaluate_five.py and generate_embeddings_drs.py
+    config_dict = {
+        'temporal_dim': config.temporal_dim,
+        'logical_dim': config.logical_dim,
+        'participant_dim': config.participant_dim,
+        'semantic_dim': config.semantic_dim,
+        'text_dim': config.text_dim,
+        'hidden_dim': config.hidden_dim,
+        'output_dim': config.output_dim,
+        'dropout': config.dropout,
+        'text_model_name': config.text_model_name,
+        'num_verbnet_classes': config.num_verbnet_classes,
+        'num_predicates': config.num_predicates,
+        'num_gnn_layers': config.num_gnn_layers,
+        'use_temporal': config.use_temporal,
+        'use_logical': config.use_logical,
+        'use_participant': config.use_participant,
+        'use_semantic': config.use_semantic,
+        'use_text': config.use_text,
+        'temperature': config.temperature,
+        'learnable_temperature': config.learnable_temperature,
+    }
+    with open(run_dir / 'config.json', 'w', encoding='utf-8') as f:
+        json.dump(config_dict, f, indent=2)
+    with open(run_dir / 'vocabularies.json', 'w', encoding='utf-8') as f:
+        json.dump({
+            'verbnet_vocab': processor.verbnet_vocab,
+            'predicate_vocab': processor.predicate_vocab,
+        }, f)
+    with open(run_dir / 'history.json', 'w', encoding='utf-8') as f:
+        json.dump(history, f, indent=2)
+
+    # Extract learned softmax weights and final temperature
+    learned_weights_tensor = F.softmax(model.component_weights.detach(), dim=0).cpu().tolist()
+    learned_weights = {
+        comp: float(w)
+        for comp, w in zip(model.active_components, learned_weights_tensor)
+    }
+    final_temperature = float(model.get_temperature().detach().cpu().item())
+
+    val_metrics = evaluate_preprocessed_dataset(
+        model, val_dataset, device, n_bootstraps=args.n_bootstraps, seed=seed
+    )
+    test_metrics = (
+        evaluate_preprocessed_dataset(
+            model, test_dataset, device, n_bootstraps=args.n_bootstraps, seed=seed
+        )
+        if test_dataset is not None
+        else None
+    )
+
+    return {
+        'name': exp_name,
+        'components': active_components,
+        'num_components': len(active_components),
+        'seed': seed,
+        'trainable_params': trainable_params,
+        'best_epoch': trainer.best_epoch + 1,
+        'train_time_sec': round(train_time, 2),
+        'final_temperature': final_temperature,
+        'learned_weights': learned_weights,
+        'val_acc': val_metrics['accuracy'],
+        'val_loss': val_metrics['loss'],
+        'val_ci': [val_metrics['ci_lower'], val_metrics['ci_upper']],
+        'val_margin': val_metrics['signed_cosine_margin_mean'],
+        'val_per_example': val_metrics['per_example'],
+        'test_acc': test_metrics['accuracy'] if test_metrics else None,
+        'test_loss': test_metrics['loss'] if test_metrics else None,
+        'test_ci': [test_metrics['ci_lower'], test_metrics['ci_upper']] if test_metrics else None,
+        'test_margin': test_metrics['signed_cosine_margin_mean'] if test_metrics else None,
+        'test_per_example': test_metrics['per_example'] if test_metrics else None,
+    }
+
+
+def aggregate_across_seeds(all_runs: List[Dict]) -> Dict[str, Dict]:
+    """Aggregate metrics across random seeds for each experiment configuration."""
+    grouped: Dict[str, List[Dict]] = {}
+    for run in all_runs:
+        grouped.setdefault(run['name'], []).append(run)
+
+    summary = {}
+    for name, runs in grouped.items():
+        val_accs = [r['val_acc'] for r in runs]
+        test_accs = [r['test_acc'] for r in runs if r['test_acc'] is not None]
+        temps = [r['final_temperature'] for r in runs]
+
+        avg_weights = {
+            comp: float(np.mean([r['learned_weights'][comp] for r in runs]))
+            for comp in runs[0]['components']
+        }
+
+        summary[name] = {
+            'name': name,
+            'components': runs[0]['components'],
+            'num_components': runs[0]['num_components'],
+            'trainable_params': runs[0]['trainable_params'],
+            'num_seeds': len(runs),
+            'final_temperature_mean': float(np.mean(temps)),
+            'val_acc_mean': float(np.mean(val_accs)),
+            'val_acc_std': float(np.std(val_accs, ddof=1)) if len(val_accs) > 1 else 0.0,
+            'val_ci_first_seed': runs[0]['val_ci'],
+            'val_margin_mean': float(np.mean([r['val_margin'] for r in runs])),
+            'test_acc_mean': float(np.mean(test_accs)) if test_accs else None,
+            'test_acc_std': (
+                float(np.std(test_accs, ddof=1)) if len(test_accs) > 1 else 0.0
+            ) if test_accs else None,
+            'test_ci_first_seed': runs[0]['test_ci'],
+            'test_margin_mean': (
+                float(np.mean([r['test_margin'] for r in runs if r['test_margin'] is not None]))
+                if test_accs else None
+            ),
+            'learned_weights': avg_weights,
+            'runs': runs,
+        }
+
+    return summary
+
+
+# ============================================================
+# ANALYTICAL VIEWS (VIEW 1, VIEW 2, VIEW 3)
+# ============================================================
+
+def compute_base_matrices(summary: Dict[str, Dict], metric_key: str) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    View 1: 4x4 Accuracy and Synergy matrices over the 4 independent base components
+    (temporal, logical, participant, text).
+        - Diagonal: single-component accuracy
+        - Off-diagonal: pair accuracy
+        - Synergy(A, B) = Acc(A + B) - max(Acc(A), Acc(B))
+    """
+    n = len(BASE_COMPONENTS)
+    acc_matrix = np.full((n, n), np.nan)
+    synergy_matrix = np.full((n, n), np.nan)
+
+    for i, comp in enumerate(BASE_COMPONENTS):
+        key = canonical_name([comp])
+        if key in summary and summary[key][metric_key] is not None:
+            acc_matrix[i, i] = summary[key][metric_key]
+            synergy_matrix[i, i] = 0.0
+
+    for i, comp_a in enumerate(BASE_COMPONENTS):
+        for j, comp_b in enumerate(BASE_COMPONENTS):
+            if i >= j:
+                continue
+            key = canonical_name([comp_a, comp_b])
+            if key in summary and summary[key][metric_key] is not None:
+                pair_acc = summary[key][metric_key]
+                acc_matrix[i, j] = pair_acc
+                acc_matrix[j, i] = pair_acc
+
+                if not np.isnan(acc_matrix[i, i]) and not np.isnan(acc_matrix[j, j]):
+                    synergy = pair_acc - max(acc_matrix[i, i], acc_matrix[j, j])
+                    synergy_matrix[i, j] = synergy
+                    synergy_matrix[j, i] = synergy
+
+    return acc_matrix, synergy_matrix
+
+
+def compute_base_complementarity(summary: Dict[str, Dict], use_test: bool) -> List[Dict]:
+    """
+    View 1b: Pairwise agreement and error-rescue complementarity across the 4
+    single-component models (computed on the first seed).
+    """
+    ex_key = 'test_per_example' if use_test else 'val_per_example'
+    rows = []
+
+    for comp_a, comp_b in itertools.combinations(BASE_COMPONENTS, 2):
+        key_a = canonical_name([comp_a])
+        key_b = canonical_name([comp_b])
+        if key_a not in summary or key_b not in summary:
+            continue
+
+        ex_a = summary[key_a]['runs'][0].get(ex_key)
+        ex_b = summary[key_b]['runs'][0].get(ex_key)
+        if not ex_a or not ex_b:
+            continue
+
+        n = len(ex_a)
+        agree = sum(1 for a, b in zip(ex_a, ex_b) if a['pred_a_closer'] == b['pred_a_closer'])
+        both_correct = sum(1 for a, b in zip(ex_a, ex_b) if a['correct'] and b['correct'])
+        only_a_correct = sum(1 for a, b in zip(ex_a, ex_b) if a['correct'] and not b['correct'])
+        only_b_correct = sum(1 for a, b in zip(ex_a, ex_b) if not a['correct'] and b['correct'])
+        oracle_correct = both_correct + only_a_correct + only_b_correct
+
+        errors_a = sum(1 for a in ex_a if not a['correct'])
+        errors_b = sum(1 for b in ex_b if not b['correct'])
+
+        rows.append({
+            'pair': f"{comp_a} vs {comp_b}",
+            'agreement_rate': agree / n,
+            'a_rescues_b': only_a_correct / errors_b if errors_b > 0 else 0.0,
+            'b_rescues_a': only_b_correct / errors_a if errors_a > 0 else 0.0,
+            'oracle_acc': oracle_correct / n,
+        })
+
+    return rows
+
+
+def compute_semantic_marginal_gains(summary: Dict[str, Dict], metric_key: str) -> List[Dict]:
+    """
+    View 2: Controlled Marginal Gain of the Semantic component (Delta-S).
+    Compares every valid model containing `semantic` against its exact twin without `semantic`.
+    """
+    twin_contexts = [
+        (['temporal', 'participant'], 'Base graphs only (T + P)'),
+        (['temporal', 'logical', 'participant'], 'With Logical (T + L + P)'),
+        (['temporal', 'participant', 'text'], 'With Text (T + P + Txt)'),
+        (['temporal', 'logical', 'participant', 'text'], 'Full model minus Semantic (T + L + P + Txt)'),
+    ]
+
+    rows = []
+    for base_comps, context_label in twin_contexts:
+        without_key = canonical_name(base_comps)
+        with_key = canonical_name(base_comps + ['semantic'])
+
+        if without_key in summary and with_key in summary:
+            acc_without = summary[without_key][metric_key]
+            acc_with = summary[with_key][metric_key]
+            if acc_without is not None and acc_with is not None:
+                rows.append({
+                    'context': context_label,
+                    'without_semantic': without_key,
+                    'with_semantic': with_key,
+                    'acc_without': acc_without,
+                    'acc_with': acc_with,
+                    'delta_semantic': acc_with - acc_without,
+                    'semantic_learned_weight': summary[with_key]['learned_weights'].get('semantic', 0.0),
+                })
+
+    return rows
+
+
+def compute_leave_one_out(summary: Dict[str, Dict], metric_key: str) -> List[Dict]:
+    """
+    View 3: Leave-One-Out (LOO) drop from the full 5-component model.
+    Because `semantic` depends on `temporal` and `participant`, removing either of those
+    structurally removes `semantic` as well (explicitly noted in the table).
+    """
+    full_key = canonical_name(COMPONENTS)
+    if full_key not in summary or summary[full_key][metric_key] is None:
+        return []
+
+    full_acc = summary[full_key][metric_key]
+    ablations = [
+        ('semantic', ['temporal', 'logical', 'participant', 'text'], 'Direct removal (-semantic)'),
+        ('logical', ['temporal', 'participant', 'semantic', 'text'], 'Direct removal (-logical)'),
+        ('text', ['temporal', 'logical', 'participant', 'semantic'], 'Direct removal (-text)'),
+        ('temporal', ['logical', 'participant', 'text'], 'Structural removal (-temporal, -semantic)'),
+        ('participant', ['temporal', 'logical', 'text'], 'Structural removal (-participant, -semantic)'),
+    ]
+
+    rows = []
+    for removed_comp, remaining_comps, removal_type in ablations:
+        rem_key = canonical_name(remaining_comps)
+        if rem_key in summary and summary[rem_key][metric_key] is not None:
+            rem_acc = summary[rem_key][metric_key]
+            rows.append({
+                'removed': removed_comp,
+                'remaining_model': rem_key,
+                'removal_type': removal_type,
+                'full_acc': full_acc,
+                'ablated_acc': rem_acc,
+                'delta_vs_full': rem_acc - full_acc,
+            })
+
+    return rows
+
+
+# ============================================================
+# SAVING & REPORTING
+# ============================================================
+
+def save_matrix_csv(matrix: np.ndarray, labels: Sequence[str], path: Path) -> None:
+    """Export a labeled square matrix to CSV (values in percentage points)."""
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow(['component'] + list(labels))
+        for i, label in enumerate(labels):
+            row = [label] + [
+                f"{matrix[i, j] * 100:.2f}" if not np.isnan(matrix[i, j]) else ""
+                for j in range(len(labels))
+            ]
+            writer.writerow(row)
+
+
+def save_heatmaps(
+    acc_matrix: np.ndarray,
+    synergy_matrix: np.ndarray,
+    semantic_gains: List[Dict],
+    output_path: Path,
+    split_label: str,
+) -> None:
+    """Save 4x4 Accuracy/Synergy heatmaps and Semantic Marginal Gain bar chart."""
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("Note: matplotlib is not installed; skipping PNG plot generation.")
+        return
+
+    num_panels = 3 if semantic_gains else 2
+    fig, axes = plt.subplots(1, num_panels, figsize=(6 * num_panels, 5.2))
+    if num_panels == 2:
+        axes = list(axes)
+
+    # Panel 1: 4x4 Base Accuracy Matrix
+    im1 = axes[0].imshow(acc_matrix * 100, cmap='YlGnBu', aspect='auto')
+    axes[0].set_title(f'Base Components Accuracy ({split_label}, %)\nDiagonal = Single | Off-diagonal = Pairs')
+    axes[0].set_xticks(range(len(BASE_COMPONENTS)))
+    axes[0].set_yticks(range(len(BASE_COMPONENTS)))
+    axes[0].set_xticklabels(BASE_COMPONENTS, rotation=25, ha='right')
+    axes[0].set_yticklabels(BASE_COMPONENTS)
+    for i in range(len(BASE_COMPONENTS)):
+        for j in range(len(BASE_COMPONENTS)):
+            if not np.isnan(acc_matrix[i, j]):
+                axes[0].text(j, i, f"{acc_matrix[i, j] * 100:.1f}%", ha='center', va='center', color='black')
+    fig.colorbar(im1, ax=axes[0], fraction=0.046, pad=0.04)
+
+    # Panel 2: 4x4 Base Synergy Matrix
+    valid_syn = synergy_matrix[~np.isnan(synergy_matrix)] * 100
+    vmax = max(float(np.max(np.abs(valid_syn))) if valid_syn.size > 0 else 1.0, 1.0)
+    im2 = axes[1].imshow(synergy_matrix * 100, cmap='RdYlGn', vmin=-vmax, vmax=vmax, aspect='auto')
+    axes[1].set_title(f'Pairwise Synergy ({split_label}, pp)\nAcc(A+B) - max(Acc(A), Acc(B))')
+    axes[1].set_xticks(range(len(BASE_COMPONENTS)))
+    axes[1].set_yticks(range(len(BASE_COMPONENTS)))
+    axes[1].set_xticklabels(BASE_COMPONENTS, rotation=25, ha='right')
+    axes[1].set_yticklabels(BASE_COMPONENTS)
+    for i in range(len(BASE_COMPONENTS)):
+        for j in range(len(BASE_COMPONENTS)):
+            if not np.isnan(synergy_matrix[i, j]):
+                val = synergy_matrix[i, j] * 100
+                sign = '+' if val > 0 else ''
+                axes[1].text(j, i, f"{sign}{val:.1f}", ha='center', va='center', color='black')
+    fig.colorbar(im2, ax=axes[1], fraction=0.046, pad=0.04)
+
+    # Panel 3: Controlled Marginal Gain of Semantic (Delta-S)
+    if semantic_gains:
+        labels = [row['without_semantic'] for row in semantic_gains]
+        deltas = [row['delta_semantic'] * 100 for row in semantic_gains]
+        colors = ['#2ca02c' if d >= 0 else '#d62728' for d in deltas]
+
+        y_pos = np.arange(len(labels))
+        axes[2].barh(y_pos, deltas, color=colors, alpha=0.85)
+        axes[2].axvline(0.0, color='black', linewidth=0.9)
+        axes[2].set_yticks(y_pos)
+        axes[2].set_yticklabels(labels, fontsize=9)
+        axes[2].set_xlabel('Accuracy Delta (percentage points)')
+        axes[2].set_title(f'Controlled Semantic Gain ({split_label})\n(+semantic vs exact twin)')
+        for idx, val in enumerate(deltas):
+            ha = 'left' if val >= 0 else 'right'
+            offset = 0.15 if val >= 0 else -0.15
+            axes[2].text(val + offset, idx, f"{val:+.2f}pp", va='center', ha=ha, fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=200)
+    plt.close(fig)
+    print(f"✓ Saved ablation plots to: {output_path}")
+
+
+def print_report(
+    summary: Dict[str, Dict],
+    acc_matrix: np.ndarray,
+    synergy_matrix: np.ndarray,
+    complementarity: List[Dict],
+    semantic_gains: List[Dict],
+    loo_rows: List[Dict],
+    metric_key: str,
+    split_label: str,
+) -> None:
+    """Print a structured summary of all three analytical views to stdout."""
+    print("\n" + "=" * 96)
+    print(f"ABLATION STUDY LEADERBOARD ({split_label.upper()})")
+    print("=" * 96)
+
+    ranked = sorted(
+        summary.values(),
+        key=lambda x: x[metric_key] if x[metric_key] is not None else -1.0,
+        reverse=True,
+    )
+
+    print(f"{'Experiment':<34} {'#C':>3} {'Val Acc':>10} {'Test Acc':>10} {'Temp':>6}   {'Learned Weights'}")
+    print("-" * 96)
+    for item in ranked:
+        val_str = f"{item['val_acc_mean'] * 100:.2f}%"
+        test_str = f"{item['test_acc_mean'] * 100:.2f}%" if item['test_acc_mean'] is not None else "N/A"
+        temp_str = f"{item['final_temperature_mean']:.3f}"
+        w_str = ", ".join(f"{k[:4]}={v:.2f}" for k, v in item['learned_weights'].items())
+        print(f"{item['name']:<34} {item['num_components']:>3} {val_str:>10} {test_str:>10} {temp_str:>6}   {w_str}")
+
+    # View 1: 4x4 Base Matrices
+    if not np.all(np.isnan(acc_matrix)):
+        print("\n" + "-" * 96)
+        print(f"VIEW 1A: 4x4 BASE ACCURACY MATRIX ({split_label}, %) — Diagonal: Single | Off-diagonal: Pairs")
+        print("-" * 96)
+        header = f"{'':<14}" + "".join(f"{c:>14}" for c in BASE_COMPONENTS)
+        print(header)
+        for i, comp in enumerate(BASE_COMPONENTS):
+            row = f"{comp:<14}" + "".join(
+                f"{acc_matrix[i, j] * 100:>13.2f}%" if not np.isnan(acc_matrix[i, j]) else f"{'--':>14}"
+                for j in range(len(BASE_COMPONENTS))
+            )
+            print(row)
+
+        print("\n" + "-" * 96)
+        print(f"VIEW 1B: 4x4 BASE SYNERGY MATRIX ({split_label}, pp) — Acc(A+B) - max(Acc(A), Acc(B))")
+        print("-" * 96)
+        print(header)
+        for i, comp in enumerate(BASE_COMPONENTS):
+            cells = []
+            for j in range(len(BASE_COMPONENTS)):
+                if np.isnan(synergy_matrix[i, j]):
+                    cells.append(f"{'--':>14}")
+                elif i == j:
+                    cells.append(f"{'0.00':>14}")
+                else:
+                    cells.append(f"{synergy_matrix[i, j] * 100:>+13.2f}%")
+            print(f"{comp:<14}" + "".join(cells))
+
+    if complementarity:
+        print("\n" + "-" * 96)
+        print(f"VIEW 1C: INDIVIDUAL MODEL COMPLEMENTARITY ({split_label})")
+        print("-" * 96)
+        print(f"{'Pair (A vs B)':<28} {'Agreement':>11} {'A rescues B':>13} {'B rescues A':>13} {'Oracle Acc':>12}")
+        for row in complementarity:
+            print(
+                f"{row['pair']:<28} "
+                f"{row['agreement_rate'] * 100:>10.2f}% "
+                f"{row['a_rescues_b'] * 100:>12.2f}% "
+                f"{row['b_rescues_a'] * 100:>12.2f}% "
+                f"{row['oracle_acc'] * 100:>11.2f}%"
+            )
+
+    # View 2: Controlled Semantic Gain
+    if semantic_gains:
+        print("\n" + "-" * 96)
+        print(f"VIEW 2: CONTROLLED MARGINAL GAIN OF SEMANTIC ({split_label})")
+        print("-" * 96)
+        print(f"{'Baseline Twin (without S)':<36} {'No S':>9} {'With S':>9} {'Delta S':>10} {'S Weight':>10}")
+        for row in semantic_gains:
+            print(
+                f"{row['without_semantic']:<36} "
+                f"{row['acc_without'] * 100:>8.2f}% "
+                f"{row['acc_with'] * 100:>8.2f}% "
+                f"{row['delta_semantic'] * 100:>+9.2f}% "
+                f"{row['semantic_learned_weight']:>10.3f}"
+            )
+
+    # View 3: Leave-One-Out from Full Model
+    if loo_rows:
+        print("\n" + "-" * 96)
+        print(f"VIEW 3: LEAVE-ONE-OUT DROP FROM FULL MODEL ({split_label})")
+        print("-" * 96)
+        print(f"{'Removed':<14} {'Ablated Model':<34} {'Ablated Acc':>12} {'Delta vs Full':>14}   {'Type'}")
+        for row in loo_rows:
+            print(
+                f"{row['removed']:<14} "
+                f"{row['remaining_model']:<34} "
+                f"{row['ablated_acc'] * 100:>11.2f}% "
+                f"{row['delta_vs_full'] * 100:>+13.2f}%   "
+                f"{row['removal_type']}"
+            )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description='Valid 19-configuration ablation study for FiveComponentModel'
+    )
+    parser.add_argument('train_data', type=str, help='Path to preprocessed training JSONL')
+    parser.add_argument('--val_data', type=str, default=None, help='Optional separate validation JSONL')
+    parser.add_argument('--test_data', type=str, default=None, help='Optional test/dev JSONL for final evaluation')
+    parser.add_argument('--val_split', type=float, default=0.1, help='Validation split ratio if --val_data is omitted')
+    parser.add_argument('--output_dir', type=str, default='./ablation_results', help='Directory for checkpoints & reports')
+
+    # Ablation levels & seeds
+    parser.add_argument(
+        '--modes',
+        nargs='+',
+        choices=['single', 'pairs', 'triplets', 'quads', 'full', 'all'],
+        default=['all'],
+        help='Ablation levels to run (default: all 19 valid configurations)',
+    )
+    parser.add_argument(
+        '--seeds',
+        nargs='+',
+        type=int,
+        default=[42],
+        help='One or more random seeds to average over (e.g., --seeds 42 123 456)',
+    )
+
+    # Training hyperparameters
+    parser.add_argument('--epochs', type=int, default=50, help='Maximum training epochs')
+    parser.add_argument('--lr', type=float, default=1e-3, help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01, help='AdamW weight decay')
+    parser.add_argument('--dropout', type=float, default=0.1, help='Dropout probability')
+    parser.add_argument('--patience', type=int, default=10, help='Early stopping patience')
+
+    # Temperature scaling
+    parser.add_argument(
+        '--temperature',
+        type=float,
+        default=0.1,
+        help='Cosine similarity logit temperature (default: 0.1; use 1.0 for unscaled cosine diff)',
+    )
+    parser.add_argument(
+        '--learnable_temperature',
+        action='store_true',
+        help='Make logit temperature a learnable parameter initialized to --temperature',
+    )
+
+    # Architecture dimensions
+    parser.add_argument('--temporal_dim', type=int, default=64)
+    parser.add_argument('--logical_dim', type=int, default=64)
+    parser.add_argument('--participant_dim', type=int, default=64)
+    parser.add_argument('--semantic_dim', type=int, default=64)
+    parser.add_argument('--hidden_dim', type=int, default=128)
+    parser.add_argument('--output_dim', type=int, default=128)
+    parser.add_argument('--text_model', type=str, default='all-MiniLM-L6-v2')
+
+    # Evaluation & runtime
+    parser.add_argument('--n_bootstraps', type=int, default=1000, help='Bootstrap resamples for CIs')
+    parser.add_argument('--device', type=str, default='auto', help='cuda, cpu, or auto')
+    parser.add_argument('--verbose_epochs', action='store_true', help='Print per-epoch training logs')
+
+    args = parser.parse_args()
+
+    device = ('cuda' if torch.cuda.is_available() else 'cpu') if args.device == 'auto' else args.device
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    experiments = build_experiment_grid(args.modes)
+
+    print("\n" + "=" * 80)
+    print("FIVE-COMPONENT DRS ENCODER — ABLATION STUDY")
+    print("=" * 80)
+    print(f"Device:         {device}")
+    print(f"Modes:          {args.modes}")
+    print(f"Valid models:   {len(experiments)} unique configurations")
+    print(f"Seeds:          {args.seeds} ({len(experiments) * len(args.seeds)} total runs)")
+    print(f"Temperature:    {args.temperature} ({'learnable' if args.learnable_temperature else 'fixed'})")
+    print(f"Output dir:     {output_dir}")
+    print("\nScheduled configurations:")
+    for idx, (exp_name, comps) in enumerate(experiments, start=1):
+        print(f"  {idx:2d}. {exp_name:<34} -> {comps}")
+
+    # 1. Build vocabularies and preprocess datasets once
+    drs_train = DRSDataset(args.train_data)
+    processor = StoryDataProcessor(drs_train, text_model_name=args.text_model)
+
+    train_dataset, val_dataset = create_datasets(
+        args.train_data,
+        processor,
+        val_jsonl_path=args.val_data,
+        val_split=args.val_split,
+        seed=args.seeds[0],
+        device=device,
+    )
+
+    test_dataset = None
+    if args.test_data is not None:
+        print(f"\nPre-processing test dataset: {args.test_data}")
+        drs_test = DRSDataset(args.test_data)
+        test_dataset = FiveTripletDataset(drs_test, processor, device=device)
+
+    # 2. Precompute frozen SBERT embeddings once for all stories
+    precompute_text_embeddings(
+        [train_dataset, val_dataset, test_dataset],
+        processor.text_model,
+        device=device,
+    )
+
+    # 3. Run all scheduled experiments
+    all_runs = []
+    total_runs = len(experiments) * len(args.seeds)
+    run_counter = 0
+
+    for exp_name, active_comps in experiments:
+        for seed in args.seeds:
+            run_counter += 1
+            print(f"\n[{run_counter}/{total_runs}] Running {exp_name} (seed={seed}) -> {active_comps}")
+
+            run_folder_name = f"{exp_name}_seed{seed}" if len(args.seeds) > 1 else exp_name
+            run_subdir = output_dir / 'runs' / run_folder_name
+
+            result = run_single_experiment(
+                exp_name=exp_name,
+                active_components=active_comps,
+                train_dataset=train_dataset,
+                val_dataset=val_dataset,
+                test_dataset=test_dataset,
+                processor=processor,
+                args=args,
+                seed=seed,
+                device=device,
+                run_dir=run_subdir,
+            )
+            all_runs.append(result)
+
+            msg = f"  ✓ {exp_name} | Val Acc: {result['val_acc'] * 100:.2f}%"
+            if result['test_acc'] is not None:
+                msg += f" | Test Acc: {result['test_acc'] * 100:.2f}%"
+            msg += (
+                f" | Temp: {result['final_temperature']:.3f}"
+                f" | Weights: { {k: round(v, 3) for k, v in result['learned_weights'].items()} }"
+            )
+            print(msg)
+
+    # 4. Aggregate across seeds & compute the three analytical views
+    summary = aggregate_across_seeds(all_runs)
+    use_test = test_dataset is not None
+    metric_key = 'test_acc_mean' if use_test else 'val_acc_mean'
+    split_label = 'Test' if use_test else 'Validation'
+
+    acc_matrix, synergy_matrix = compute_base_matrices(summary, metric_key)
+    complementarity = compute_base_complementarity(summary, use_test=use_test)
+    semantic_gains = compute_semantic_marginal_gains(summary, metric_key)
+    loo_rows = compute_leave_one_out(summary, metric_key)
+
+    # 5. Print console report
+    print_report(
+        summary=summary,
+        acc_matrix=acc_matrix,
+        synergy_matrix=synergy_matrix,
+        complementarity=complementarity,
+        semantic_gains=semantic_gains,
+        loo_rows=loo_rows,
+        metric_key=metric_key,
+        split_label=split_label,
+    )
+
+    # 6. Export CSVs, JSON, and PNG plots
+    with open(output_dir / 'ablation_summary.csv', 'w', newline='', encoding='utf-8') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            'experiment', 'components', 'num_components', 'trainable_params',
+            'final_temperature_mean', 'val_acc_mean', 'val_acc_std',
+            'test_acc_mean', 'test_acc_std', 'learned_weights',
+        ])
+        for item in sorted(summary.values(), key=lambda x: x[metric_key] or -1.0, reverse=True):
+            writer.writerow([
+                item['name'],
+                '+'.join(item['components']),
+                item['num_components'],
+                item['trainable_params'],
+                f"{item['final_temperature_mean']:.4f}",
+                f"{item['val_acc_mean']:.6f}",
+                f"{item['val_acc_std']:.6f}",
+                f"{item['test_acc_mean']:.6f}" if item['test_acc_mean'] is not None else "",
+                f"{item['test_acc_std']:.6f}" if item['test_acc_std'] is not None else "",
+                json.dumps(item['learned_weights']),
+            ])
+
+    save_matrix_csv(acc_matrix, BASE_COMPONENTS, output_dir / 'base_accuracy_matrix.csv')
+    save_matrix_csv(synergy_matrix, BASE_COMPONENTS, output_dir / 'base_synergy_matrix.csv')
+
+    if semantic_gains:
+        with open(output_dir / 'semantic_marginal_gain.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=list(semantic_gains[0].keys()))
+            writer.writeheader()
+            writer.writerows(semantic_gains)
+
+    if loo_rows:
+        with open(output_dir / 'leave_one_out.csv', 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=list(loo_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(loo_rows)
+
+    save_heatmaps(
+        acc_matrix=acc_matrix,
+        synergy_matrix=synergy_matrix,
+        semantic_gains=semantic_gains,
+        output_path=output_dir / 'ablation_plots.png',
+        split_label=split_label,
+    )
+
+    json_payload = {
+        'split_evaluated': split_label,
+        'components': COMPONENTS,
+        'base_components': BASE_COMPONENTS,
+        'seeds': args.seeds,
+        'temperature_init': args.temperature,
+        'learnable_temperature': args.learnable_temperature,
+        'base_accuracy_matrix': np.where(np.isnan(acc_matrix), None, acc_matrix).tolist(),
+        'base_synergy_matrix': np.where(np.isnan(synergy_matrix), None, synergy_matrix).tolist(),
+        'individual_complementarity': complementarity,
+        'semantic_marginal_gains': semantic_gains,
+        'leave_one_out': loo_rows,
+        'summary': {
+            k: {sk: sv for sk, sv in v.items() if sk != 'runs'}
+            for k, v in summary.items()
+        },
+    }
+    with open(output_dir / 'ablation_results.json', 'w', encoding='utf-8') as f:
+        json.dump(json_payload, f, indent=2, ensure_ascii=False)
+
+    print(f"\n✓ All ablation outputs saved to: {output_dir.resolve()}")
+
+
+if __name__ == "__main__":
+    main()

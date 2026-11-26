@@ -300,6 +300,8 @@ def load_model_and_processor(
         use_participant=config_dict.get('use_participant', True),
         use_semantic=config_dict.get('use_semantic', True),
         use_text=config_dict.get('use_text', True),
+        temperature=config_dict.get('temperature', 1.0),
+        learnable_temperature=config_dict.get('learnable_temperature', False),
     )
 
     # Create model
@@ -368,7 +370,6 @@ def main():
     metrics = evaluator.evaluate_dataset(
         test_dataset,
         verbose=True,
-        normalize=not args.no_normalize,
         n_bootstraps=args.n_bootstraps,
         ci=args.ci,
         seed=args.seed,

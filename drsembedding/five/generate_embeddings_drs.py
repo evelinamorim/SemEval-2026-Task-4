@@ -194,6 +194,8 @@ def load_model_and_config(checkpoint_dir: str, device: str = 'cpu') -> Inference
         use_participant=config_dict['use_participant'],
         use_semantic=config_dict['use_semantic'],
         use_text=config_dict['use_text'],
+        temperature=config_dict.get('temperature', 1.0),
+        learnable_temperature=config_dict.get('learnable_temperature', False),
     )
 
     # Load vocabularies

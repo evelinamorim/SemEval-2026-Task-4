@@ -125,6 +125,7 @@ class FiveComponentTrainer:
             'val_loss': [],
             'val_acc': [],
             'lr': [],
+            'temperature': [],
         }
 
         self.best_val_acc = 0.0
@@ -215,6 +216,11 @@ class FiveComponentTrainer:
         print(
             f"{'Epoch':>6} {'Train Loss':>12} {'Train Acc':>10} {'Val Loss':>12} {'Val Acc':>10} {'LR':>12} {'Time':>8}")
         print("-" * 70)
+        print(
+            f"{'Epoch':>6} {'Train Loss':>12} {'Train Acc':>10} "
+            f"{'Val Loss':>12} {'Val Acc':>10} {'Temp':>8} {'LR':>12} {'Time':>8}"
+        )
+        print("-" * 80)
 
         for epoch in range(num_epochs):
             start_time = time.time()
@@ -229,6 +235,7 @@ class FiveComponentTrainer:
 
             # Get learning rate
             current_lr = self.optimizer.param_groups[0]['lr']
+            current_temp = self.model.get_temperature().item()
 
             # Update scheduler
             if self.scheduler is not None:
@@ -240,6 +247,7 @@ class FiveComponentTrainer:
             self.history['val_loss'].append(val_loss)
             self.history['val_acc'].append(val_acc)
             self.history['lr'].append(current_lr)
+            self.history['temperature'].append(current_temp)
 
             # Check for improvement
             if val_acc > self.best_val_acc:
@@ -259,7 +267,11 @@ class FiveComponentTrainer:
 
             # Early stopping
             if no_improve_count >= patience:
-                print(f"\nEarly stopping at epoch {epoch + 1} (no improvement for {patience} epochs)")
+                print(
+                    f"{epoch + 1:>6} {train_loss:>12.4f} {train_acc * 100:>9.2f}% "
+                    f"{val_loss:>12.4f} {val_acc * 100:>9.2f}%{marker} "
+                    f"{current_temp:>8.4f} {current_lr:>12.6f} {elapsed:>7.1f}s"
+                )
                 break
 
         print("-" * 70)
@@ -370,6 +382,17 @@ def main():
     parser.add_argument('--no_participant', action='store_true', help='Disable participant component')
     parser.add_argument('--no_semantic', action='store_true', help='Disable semantic component')
     parser.add_argument('--no_text', action='store_true', help='Disable text component')
+    parser.add_argument(
+        '--temperature',
+        type=float,
+        default=1.0,
+        help='Fixed or initial temperature for cosine similarity logits (default: 1.0)',
+    )
+    parser.add_argument(
+        '--learnable_temperature',
+        action='store_true',
+        help='Enable learnable temperature during training (default: False, fixed)',
+    )
 
     args = parser.parse_args()
 
@@ -423,6 +446,8 @@ def main():
         use_participant=not args.no_participant,
         use_semantic=not args.no_semantic,
         use_text=not args.no_text,
+        temperature=args.temperature,
+        learnable_temperature=args.learnable_temperature,
     )
 
     # Create datasets
@@ -499,6 +524,9 @@ def main():
         'use_participant': config.use_participant,
         'use_semantic': config.use_semantic,
         'use_text': config.use_text,
+        'temperature': config.temperature,
+        'learnable_temperature': config.learnable_temperature,
+        'final_temperature': model.get_temperature().item(),
     }
 
     with open(trainer.checkpoint_dir / 'config.json', 'w') as f:
